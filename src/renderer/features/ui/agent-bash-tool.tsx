@@ -16,7 +16,9 @@ interface AgentBashToolProps {
 
 // Extract command summary - first word of each command in a pipeline
 function extractCommandSummary(command: string): string {
-  const parts = command.split(/\s*(?:&&|\|\||;|\|)\s*/)
+  // First, normalize line continuations (backslash + newline) into single line
+  const normalizedCommand = command.replace(/\\\s*\n\s*/g, " ")
+  const parts = normalizedCommand.split(/\s*(?:&&|\|\||;|\|)\s*/)
   const firstWords = parts.map((p) => p.trim().split(/\s+/)[0]).filter(Boolean)
   // Limit to first 4 commands to keep it concise
   const limited = firstWords.slice(0, 4)

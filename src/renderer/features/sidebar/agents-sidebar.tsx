@@ -100,6 +100,10 @@ import { Checkbox } from "../../components/ui/checkbox"
 import { useHaptic } from "./hooks/use-haptic"
 import { TypewriterText } from "../../components/ui/typewriter-text"
 
+// Feedback URL: uses env variable for hosted version, falls back to public Discord for open source
+const FEEDBACK_URL =
+  import.meta.env.VITE_FEEDBACK_URL || "https://discord.gg/8ektTZGnj4"
+
 // Component to render chat icon with loading status
 const ChatIcon = React.memo(function ChatIcon({
   isSelected,
@@ -451,12 +455,27 @@ export function AgentsSidebar({
   const handleRenameSave = async (newName: string) => {
     if (!renamingChat) return
 
+    const chatId = renamingChat.id
+    const oldName = renamingChat.name
+
+    // Optimistically update the query cache
+    utils.chats.list.setData({}, (old) => {
+      if (!old) return old
+      return old.map((c) => (c.id === chatId ? { ...c, name: newName } : c))
+    })
+
     setRenameLoading(true)
 
     try {
       await renameChatMutation.mutateAsync({
-        chatId: renamingChat.id,
+        id: chatId,
         name: newName,
+      })
+    } catch {
+      // Rollback on error
+      utils.chats.list.setData({}, (old) => {
+        if (!old) return old
+        return old.map((c) => (c.id === chatId ? { ...c, name: oldName } : c))
       })
     } finally {
       setRenameLoading(false)
@@ -2113,9 +2132,7 @@ export function AgentsSidebar({
 
             {/* Feedback Button */}
             <ButtonCustom
-              onClick={() =>
-                window.open("https://discord.gg/utff7AdDaV", "_blank")
-              }
+              onClick={() => window.open(FEEDBACK_URL, "_blank")}
               variant="outline"
               size="sm"
               className={cn(

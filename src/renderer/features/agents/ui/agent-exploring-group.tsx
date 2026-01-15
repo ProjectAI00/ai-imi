@@ -90,7 +90,7 @@ export const AgentExploringGroup = memo(function AgentExploringGroup({
 
       {/* Tools list - only show when expanded */}
       {isExpanded && (
-        <div className="relative">
+        <div className="relative mt-1">
           {/* Top gradient fade when streaming and has many items */}
           <div
             className={cn(
@@ -105,6 +105,7 @@ export const AgentExploringGroup = memo(function AgentExploringGroup({
           <div
             ref={scrollRef}
             className={cn(
+              "space-y-1.5",
               parts.length > MAX_VISIBLE_TOOLS &&
                 "overflow-y-auto scrollbar-hide",
             )}

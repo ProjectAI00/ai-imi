@@ -16,6 +16,7 @@ import {
 import {
   initAutoUpdater,
   checkForUpdates,
+  downloadUpdate,
   setupFocusUpdateCheck,
 } from "./lib/auto-updater"
 
@@ -464,7 +465,12 @@ if (gotTheLock) {
                 if (win) {
                   win.webContents.send("update:manual-check")
                 }
-                checkForUpdates(true)
+                // If update is already available, start downloading immediately
+                if (updateAvailable) {
+                  downloadUpdate()
+                } else {
+                  checkForUpdates(true)
+                }
               },
             },
             { type: "separator" },

@@ -198,6 +198,25 @@ export async function checkForUpdates(force = false) {
 }
 
 /**
+ * Start downloading the update
+ */
+export async function downloadUpdate() {
+  if (!app.isPackaged) {
+    log.info("[AutoUpdater] Skipping download in dev mode")
+    return false
+  }
+
+  try {
+    log.info("[AutoUpdater] Starting update download...")
+    await autoUpdater.downloadUpdate()
+    return true
+  } catch (error) {
+    log.error("[AutoUpdater] Download failed:", error)
+    return false
+  }
+}
+
+/**
  * Check for updates when window gains focus
  * This is more natural than checking on an interval
  */

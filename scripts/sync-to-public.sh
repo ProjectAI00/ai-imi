@@ -74,6 +74,10 @@ PLAN-*.md
 ERROR-HANDLING.md
 docs/
 test-electron.js
+
+# Exclude internal release docs (contains credentials, CDN URLs)
+RELEASE.md
+scripts/upload-release-wrangler.sh
 EOF
 
 # Commit and push

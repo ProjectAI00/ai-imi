@@ -1,8 +1,8 @@
 "use client"
 
 import { memo } from "react"
-import { HelpCircle } from "lucide-react"
 import { TextShimmer } from "../../../components/ui/text-shimmer"
+import { QuestionIcon } from "../../../components/ui/icons"
 import { QUESTIONS_SKIPPED_MESSAGE, QUESTIONS_TIMED_OUT_MESSAGE } from "../atoms"
 
 interface AgentAskUserQuestionToolProps {
@@ -100,7 +100,7 @@ export const AgentAskUserQuestionTool = memo(function AgentAskUserQuestionTool({
       <div className="rounded-lg border border-border bg-muted/30 overflow-hidden mx-2">
         {/* Header */}
         <div className="flex items-center gap-1.5 pl-2.5 pr-2 h-7 border-b border-border">
-          <HelpCircle className="w-3.5 h-3.5 text-muted-foreground" />
+          <QuestionIcon className="w-3.5 h-3.5 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">Answers</span>
         </div>
         {/* Content */}

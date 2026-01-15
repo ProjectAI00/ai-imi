@@ -84,6 +84,7 @@ import {
   saveGlobalDrafts,
   generateDraftId,
   deleteNewChatDraft,
+  markDraftVisible,
   type DraftProject,
 } from "../lib/drafts"
 // import type { PlanType } from "@/lib/config/subscription-plans"
@@ -122,7 +123,7 @@ export function NewChatForm({
   // UNCONTROLLED: just track if editor has content for send button
   const [hasContent, setHasContent] = useState(false)
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
-  const [, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
 
@@ -497,6 +498,17 @@ export function NewChatForm({
       }
     }
   }, [selectedDraftId])
+
+  // Mark draft as visible when component unmounts (user navigates away)
+  // This ensures the draft only appears in the sidebar after leaving the form
+  useEffect(() => {
+    return () => {
+      // On unmount, mark current draft as visible so it appears in sidebar
+      if (currentDraftIdRef.current) {
+        markDraftVisible(currentDraftIdRef.current)
+      }
+    }
+  }, [])
 
   // Filter all repos by search (combined list) and sort by preview status
   const filteredRepos = repos

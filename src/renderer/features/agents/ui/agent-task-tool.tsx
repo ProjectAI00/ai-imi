@@ -156,7 +156,7 @@ export const AgentTaskTool = memo(function AgentTaskTool({
 
       {/* Nested tools - only show when expanded */}
       {hasNestedTools && isExpanded && (
-        <div className="relative">
+        <div className="relative mt-1">
           {/* Top gradient fade when streaming and has many items */}
           <div
             className={cn(
@@ -171,6 +171,7 @@ export const AgentTaskTool = memo(function AgentTaskTool({
           <div
             ref={scrollRef}
             className={cn(
+              "space-y-1.5",
               isPending &&
                 nestedTools.length > MAX_VISIBLE_TOOLS &&
                 "overflow-y-auto scrollbar-hide",

@@ -25,6 +25,7 @@ export interface NewChatDraft {
   text: string
   updatedAt: number
   project?: DraftProject
+  isVisible?: boolean // Only show in sidebar when user navigates away from the form
 }
 
 // SubChatDraft uses key format: "chatId:subChatId"
@@ -76,7 +77,7 @@ export function isSubChatDraftKey(key: string): boolean {
   return key.includes(":")
 }
 
-// Get new chat drafts as sorted array
+// Get new chat drafts as sorted array (only visible ones)
 export function getNewChatDrafts(): NewChatDraft[] {
   const globalDrafts = loadGlobalDrafts()
   return Object.entries(globalDrafts)
@@ -86,7 +87,9 @@ export function getNewChatDrafts(): NewChatDraft[] {
       text: (data as NewChatDraft).text || "",
       updatedAt: data.updatedAt || 0,
       project: (data as NewChatDraft).project,
+      isVisible: (data as NewChatDraft).isVisible,
     }))
+    .filter((draft) => draft.isVisible === true)
     .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
@@ -114,6 +117,15 @@ export function deleteNewChatDraft(draftId: string): void {
   const globalDrafts = loadGlobalDrafts()
   delete globalDrafts[draftId]
   saveGlobalDrafts(globalDrafts)
+}
+
+// Mark a draft as visible (called when user navigates away from the form)
+export function markDraftVisible(draftId: string): void {
+  const globalDrafts = loadGlobalDrafts()
+  if (globalDrafts[draftId]) {
+    ;(globalDrafts[draftId] as NewChatDraft).isVisible = true
+    saveGlobalDrafts(globalDrafts)
+  }
 }
 
 // Get sub-chat draft key
