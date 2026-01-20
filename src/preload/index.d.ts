@@ -14,6 +14,10 @@ export interface DesktopApi {
   startAuthFlow: () => Promise<void>
   onAuthSuccess: (callback: (user: any) => void) => () => void
   onAuthError: (callback: (error: string) => void) => () => void
+  // API key management
+  getApiKeys: () => Promise<Record<string, string>>
+  setApiKey: (service: string, apiKey: string) => Promise<void>
+  testApiKey: (service: string, apiKey: string) => Promise<{ success: boolean; error?: string }>
 }
 
 declare global {

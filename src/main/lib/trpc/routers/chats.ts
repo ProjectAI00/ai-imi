@@ -120,6 +120,8 @@ export const chatsRouter = router({
         baseBranch: z.string().optional(), // Branch to base the worktree off
         useWorktree: z.boolean().default(true), // If false, work directly in project dir
         mode: z.enum(["plan", "agent"]).default("agent"),
+        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid"]).default("claude-code"),
+        model: z.string().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -170,6 +172,8 @@ export const chatsRouter = router({
         .values({
           chatId: chat.id,
           mode: input.mode,
+          cli: input.cli,
+          model: input.model,
           messages: initialMessages,
         })
         .returning()
@@ -390,6 +394,7 @@ export const chatsRouter = router({
         chatId: z.string(),
         name: z.string().optional(),
         mode: z.enum(["plan", "agent"]).default("agent"),
+        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid"]).default("claude-code"),
       }),
     )
     .mutation(({ input }) => {
@@ -400,6 +405,7 @@ export const chatsRouter = router({
           chatId: input.chatId,
           name: input.name,
           mode: input.mode,
+          cli: input.cli,
           messages: "[]",
         })
         .returning()

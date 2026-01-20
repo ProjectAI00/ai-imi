@@ -15,6 +15,8 @@ export interface AuthData {
   refreshToken: string
   expiresAt: string
   user: AuthUser
+  // Third-party API keys
+  ampApiKey?: string
 }
 
 /**

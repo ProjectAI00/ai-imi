@@ -131,12 +131,21 @@ contextBridge.exposeInMainWorld("desktopApi", {
     return () => ipcRenderer.removeListener("auth:error", handler)
   },
 
+  // API key management
+  getApiKeys: () => ipcRenderer.invoke("auth:get-api-keys"),
+  setApiKey: (service: string, apiKey: string) => ipcRenderer.invoke("auth:set-api-key", service, apiKey),
+  testApiKey: (service: string, apiKey: string) => ipcRenderer.invoke("auth:test-api-key", service, apiKey),
+
   // Shortcut events (from main process menu accelerators)
   onShortcutNewAgent: (callback: () => void) => {
     const handler = () => callback()
     ipcRenderer.on("shortcut:new-agent", handler)
     return () => ipcRenderer.removeListener("shortcut:new-agent", handler)
   },
+
+  // CLI authentication
+  openLoginFlow: (cli: string) => ipcRenderer.invoke("cli:open-login-flow", cli),
+  runCommand: (command: string) => ipcRenderer.invoke("cli:run-command", command),
 })
 
 // Type definitions
@@ -205,6 +214,9 @@ export interface DesktopApi {
   onAuthError: (callback: (error: string) => void) => () => void
   // Shortcuts
   onShortcutNewAgent: (callback: () => void) => () => void
+  // CLI authentication
+  openLoginFlow: (cli: string) => Promise<void>
+  runCommand: (command: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 }
 
 declare global {

@@ -36,6 +36,7 @@ import {
   lastSelectedAgentIdAtom,
   lastSelectedBranchesAtom,
   lastSelectedModelIdAtom,
+  lastSelectedModelPerAgentAtom,
   lastSelectedRepoAtom,
   lastSelectedWorkModeAtom,
   selectedAgentChatIdAtom,
@@ -97,18 +98,22 @@ const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
   </svg>
 )
 
-// Model options for Claude Code
-const claudeModels = [
-  { id: "opus", name: "Opus" },
-  { id: "sonnet", name: "Sonnet" },
-  { id: "haiku", name: "Haiku" },
-]
+// Model options for CLI adapters
+import {
+  claudeCodeModels as claudeModels,
+  openCodeModels,
+  cursorModels,
+  ampModels,
+  droidModels,
+} from "../../../../shared/models"
 
 // Agent providers
 const agents = [
   { id: "claude-code", name: "Claude Code", hasModels: true },
-  { id: "cursor", name: "Cursor CLI", disabled: true },
-  { id: "codex", name: "OpenAI Codex", disabled: true },
+  { id: "opencode", name: "OpenCode", hasModels: true },
+  { id: "cursor", name: "Cursor", hasModels: true },
+  { id: "amp", name: "AMP", hasModels: true },
+  { id: "droid", name: "Droid", hasModels: true },
 ]
 
 interface NewChatFormProps {
@@ -164,6 +169,9 @@ export function NewChatForm({
   const [lastSelectedModelId, setLastSelectedModelId] = useAtom(
     lastSelectedModelIdAtom,
   )
+  const [lastSelectedModelPerAgent, setLastSelectedModelPerAgent] = useAtom(
+    lastSelectedModelPerAgentAtom,
+  )
   const [isPlanMode, setIsPlanMode] = useAtom(isPlanModeAtom)
   const [workMode, setWorkMode] = useAtom(lastSelectedWorkModeAtom)
   const debugMode = useAtomValue(agentsDebugModeAtom)
@@ -181,10 +189,41 @@ export function NewChatForm({
   const [selectedAgent, setSelectedAgent] = useState(
     () => agents.find((a) => a.id === lastSelectedAgentId) || agents[0],
   )
+
+  // Get available models for selected agent
+  const getModelsForAgent = (agentId: string) => {
+    switch (agentId) {
+      case "claude-code":
+        return claudeModels
+      case "opencode":
+        return openCodeModels
+      case "cursor":
+        return cursorModels
+      case "amp":
+        return ampModels
+      case "droid":
+        return droidModels
+      default:
+        return claudeModels
+    }
+  }
+
+  // Get default model for agent
+  const getDefaultModelForAgent = (agentId: string) => {
+    const models = getModelsForAgent(agentId)
+    const savedModelId = lastSelectedModelPerAgent[agentId]
+    return models.find((m) => m.id === savedModelId) || models[1] || models[0]
+  }
+
   const [selectedModel, setSelectedModel] = useState(
-    () =>
-      claudeModels.find((m) => m.id === lastSelectedModelId) || claudeModels[1],
+    () => getDefaultModelForAgent(selectedAgent.id),
   )
+
+  // Update selected model when agent changes
+  useEffect(() => {
+    const newModel = getDefaultModelForAgent(selectedAgent.id)
+    setSelectedModel(newModel)
+  }, [selectedAgent.id])
   const [repoPopoverOpen, setRepoPopoverOpen] = useState(false)
   const [branchPopoverOpen, setBranchPopoverOpen] = useState(false)
   const [lastSelectedBranches, setLastSelectedBranches] = useAtom(
@@ -597,10 +636,10 @@ export function NewChatForm({
     switch (agentId) {
       case "claude-code":
         return <ClaudeCodeIcon className={className} />
+      case "opencode":
+        return <CodexIcon className={className} />
       case "cursor":
         return <CursorIcon className={className} />
-      case "codex":
-        return <CodexIcon className={className} />
       default:
         return null
     }
@@ -618,14 +657,14 @@ export function NewChatForm({
     type MessagePart =
       | { type: "text"; text: string }
       | {
-          type: "data-image"
-          data: {
-            url: string
-            mediaType?: string
-            filename?: string
-            base64Data?: string
-          }
+        type: "data-image"
+        data: {
+          url: string
+          mediaType?: string
+          filename?: string
+          base64Data?: string
         }
+      }
 
     const parts: MessagePart[] = images
       .filter((img) => !img.isLoading && img.url)
@@ -652,6 +691,8 @@ export function NewChatForm({
         workMode === "worktree" ? selectedBranch || undefined : undefined,
       useWorktree: workMode === "worktree",
       mode: isPlanMode ? "plan" : "agent",
+      cli: selectedAgent.id as "claude-code" | "opencode" | "cursor" | "amp" | "droid",
+      model: selectedModel?.id,
     })
     // Editor and images are cleared in onSuccess callback
   }, [
@@ -662,6 +703,8 @@ export function NewChatForm({
     workMode,
     images,
     isPlanMode,
+    selectedAgent,
+    selectedModel,
   ])
 
   const handleMentionSelect = useCallback((mention: FileMentionOption) => {
@@ -1159,41 +1202,38 @@ export function NewChatForm({
                           )}
                       </DropdownMenu>
 
-                      {/* Model selector */}
+                      {/* CLI/Agent selector */}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                            <ClaudeCodeIcon className="h-3.5 w-3.5" />
+                            {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5")}
                             <span>
-                              {selectedModel?.name}{" "}
-                              <span className="text-muted-foreground">4.5</span>
+                              {selectedAgent.name}
+                              {selectedAgent.hasModels && (
+                                <span className="text-muted-foreground"> {selectedModel?.name}</span>
+                              )}
                             </span>
                             <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
                           align="start"
-                          className="w-[150px]"
+                          className="w-[180px]"
                         >
-                          {claudeModels.map((model) => {
-                            const isSelected = selectedModel?.id === model.id
+                          {agents.map((agent) => {
+                            const isSelected = selectedAgent.id === agent.id
                             return (
                               <DropdownMenuItem
-                                key={model.id}
+                                key={agent.id}
                                 onClick={() => {
-                                  setSelectedModel(model)
-                                  setLastSelectedModelId(model.id)
+                                  setSelectedAgent(agent)
+                                  setLastSelectedAgentId(agent.id)
                                 }}
                                 className="gap-2 justify-between"
                               >
                                 <div className="flex items-center gap-1.5">
-                                  <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                  <span>
-                                    {model.name}{" "}
-                                    <span className="text-muted-foreground">
-                                      4.5
-                                    </span>
-                                  </span>
+                                  {getAgentIcon(agent.id, "h-3.5 w-3.5 text-muted-foreground shrink-0")}
+                                  <span>{agent.name}</span>
                                 </div>
                                 {isSelected && (
                                   <CheckIcon className="h-3.5 w-3.5 shrink-0" />
@@ -1203,6 +1243,61 @@ export function NewChatForm({
                           })}
                         </DropdownMenuContent>
                       </DropdownMenu>
+
+                      {/* Model selector - only show for agents with models */}
+                      {selectedAgent.hasModels && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
+                              <span>
+                                {selectedModel?.name}
+                                {selectedAgent.id === "claude-code" && (
+                                  <span className="text-muted-foreground"> 4.5</span>
+                                )}
+                              </span>
+                              <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="start"
+                            className="w-[150px]"
+                          >
+                            {getModelsForAgent(selectedAgent.id).map((model) => {
+                              const isSelected = selectedModel?.id === model.id
+                              return (
+                                <DropdownMenuItem
+                                  key={model.id}
+                                  onClick={() => {
+                                    setSelectedModel(model)
+                                    setLastSelectedModelPerAgent((prev) => ({
+                                      ...prev,
+                                      [selectedAgent.id]: model.id,
+                                    }))
+                                    // Also update legacy atom for backward compatibility
+                                    if (selectedAgent.id === "claude-code") {
+                                      setLastSelectedModelId(model.id)
+                                    }
+                                  }}
+                                  className="gap-2 justify-between"
+                                >
+                                  <div className="flex items-center gap-1.5">
+                                    {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5 text-muted-foreground shrink-0")}
+                                    <span>
+                                      {model.name}
+                                      {selectedAgent.id === "claude-code" && (
+                                        <span className="text-muted-foreground"> 4.5</span>
+                                      )}
+                                    </span>
+                                  </div>
+                                  {isSelected && (
+                                    <CheckIcon className="h-3.5 w-3.5 shrink-0" />
+                                  )}
+                                </DropdownMenuItem>
+                              )
+                            })}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">

@@ -3,12 +3,14 @@ import type { ChatTransport, UIMessage } from "ai"
 import { toast } from "sonner"
 import {
   agentsLoginModalOpenAtom,
+  cliLoginModalAtom,
   extendedThinkingEnabledAtom,
 } from "../../../lib/atoms"
 import { appStore } from "../../../lib/jotai-store"
 import { trpcClient } from "../../../lib/trpc"
 import {
   lastSelectedModelIdAtom,
+  lastSelectedModelPerAgentAtom,
   MODEL_ID_MAP,
   pendingAuthRetryMessageAtom,
   pendingUserQuestionsAtom,
@@ -80,6 +82,52 @@ const ERROR_TOAST_CONFIG: Record<
     title: "Authentication failed",
     description: "Your session may have expired. Try logging in again.",
   },
+  // Cursor CLI errors
+  CURSOR_NOT_INSTALLED: {
+    title: "Cursor CLI not found",
+    description:
+      "Install Cursor and enable the CLI in Cursor > Settings > Enable CLI",
+    action: {
+      label: "Open Cursor",
+      onClick: () => {
+        // Try to open Cursor app
+        window.open("cursor://", "_blank")
+      },
+    },
+  },
+  CURSOR_AUTH_REQUIRED: {
+    title: "Cursor authentication required",
+    description:
+      "Please log into the Cursor app with an active subscription.",
+    action: {
+      label: "Open Cursor",
+      onClick: () => {
+        window.open("cursor://", "_blank")
+      },
+    },
+  },
+  CURSOR_ERROR: {
+    title: "Cursor error",
+    description:
+      "An error occurred with Cursor. Check that Cursor is running and try again.",
+  },
+  // OpenCode CLI errors
+  OPENCODE_NOT_INSTALLED: {
+    title: "OpenCode CLI not found",
+    description: "Install OpenCode: npm install -g opencode",
+    action: {
+      label: "Copy command",
+      onClick: () => navigator.clipboard.writeText("npm install -g opencode"),
+    },
+  },
+  OPENCODE_AUTH_REQUIRED: {
+    title: "OpenCode authentication required",
+    description: "Run 'opencode auth login' to configure your API keys.",
+    action: {
+      label: "Copy command",
+      onClick: () => navigator.clipboard.writeText("opencode auth login"),
+    },
+  },
 }
 
 type UIMessageChunk = any // Inferred from subscription
@@ -90,6 +138,7 @@ type IPCChatTransportConfig = {
   cwd: string
   mode: "plan" | "agent"
   model?: string
+  cli?: "claude-code" | "opencode" | "cursor"
 }
 
 // Image attachment type matching the tRPC schema
@@ -124,8 +173,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const maxThinkingTokens = thinkingEnabled ? 128_000 : undefined
 
     // Read model selection dynamically (so model changes apply to existing chats)
-    const selectedModelId = appStore.get(lastSelectedModelIdAtom)
-    const modelString = MODEL_ID_MAP[selectedModelId]
+    // Use per-agent model selection if available, fallback to legacy atom
+    const lastSelectedModelPerAgent = appStore.get(lastSelectedModelPerAgentAtom)
+    const cli = this.config.cli || "claude-code"
+    const selectedModelId = lastSelectedModelPerAgent[cli] || appStore.get(lastSelectedModelIdAtom)
+    const modelString = MODEL_ID_MAP[selectedModelId] || selectedModelId
 
     const currentMode =
       useAgentSubChatStore
@@ -149,6 +201,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             cwd: this.config.cwd,
             mode: currentMode,
             sessionId,
+            cli: this.config.cli || "claude-code",
             ...(maxThinkingTokens && { maxThinkingTokens }),
             ...(modelString && { model: modelString }),
             ...(images.length > 0 && { images }),
@@ -205,7 +258,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 }
               }
 
-              // Handle authentication errors - show Claude login modal
+              // Handle authentication errors - show appropriate login modal
               if (chunk.type === "auth-error") {
                 // Store the failed message for retry after successful auth
                 // readyToRetry=false prevents immediate retry - modal sets it to true on OAuth success
@@ -215,8 +268,17 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   ...(images.length > 0 && { images }),
                   readyToRetry: false,
                 })
-                // Show the Claude Code login modal
-                appStore.set(agentsLoginModalOpenAtom, true)
+                
+                // Show the appropriate login modal based on CLI type
+                const cli = chunk.cli
+                if (cli && cli !== "claude-code") {
+                  // Show CLI-specific login modal for AMP, Droid, Cursor, etc.
+                  appStore.set(cliLoginModalAtom, { open: true, cli })
+                } else {
+                  // Show the Claude Code login modal (default)
+                  appStore.set(agentsLoginModalOpenAtom, true)
+                }
+                
                 // Use controller.error() instead of controller.close() so that
                 // the SDK Chat properly resets status from "streaming" to "ready"
                 // This allows user to retry sending messages after failed auth

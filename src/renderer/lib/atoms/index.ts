@@ -292,6 +292,16 @@ export const agentsShortcutsDialogOpenAtom = atom<boolean>(false)
 // Login modal (shown when Claude Code auth fails)
 export const agentsLoginModalOpenAtom = atom<boolean>(false)
 
+// CLI Login modal (shown when AMP, Droid, Cursor, etc. auth fails)
+export type CliLoginModalState = {
+  open: boolean
+  cli: "amp" | "droid" | "cursor" | "opencode" | null
+}
+export const cliLoginModalAtom = atom<CliLoginModalState>({
+  open: false,
+  cli: null,
+})
+
 // Help popover
 export const agentsHelpPopoverOpenAtom = atom<boolean>(false)
 

@@ -179,6 +179,137 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
     }
     await handleAuthCode(code)
   })
+
+  // API key management
+  ipcMain.handle("auth:get-api-keys", (event) => {
+    if (!validateSender(event)) return {}
+    try {
+      const { AuthStore } = require("../auth-store")
+      const authStore = new AuthStore(app.getPath("userData"))
+      const authData = authStore.load()
+      return {
+        ampApiKey: authData?.ampApiKey || "",
+      }
+    } catch (error) {
+      console.error("Failed to get API keys:", error)
+      return {}
+    }
+  })
+
+  ipcMain.handle("auth:set-api-key", async (event, service: string, apiKey: string) => {
+    if (!validateSender(event)) return
+    if (!service || !apiKey || typeof service !== "string" || typeof apiKey !== "string") {
+      throw new Error("Invalid service or API key")
+    }
+
+    try {
+      const { AuthStore } = require("../auth-store")
+      const authStore = new AuthStore(app.getPath("userData"))
+      const currentData = authStore.load() || {}
+
+      // Update the specific API key
+      if (service === "amp") {
+        currentData.ampApiKey = apiKey
+      }
+
+      // Save back to store
+      authStore.save(currentData)
+      console.log(`[Auth] Saved ${service} API key`)
+    } catch (error) {
+      console.error(`Failed to save ${service} API key:`, error)
+      throw error
+    }
+  })
+
+  ipcMain.handle("auth:test-api-key", async (event, service: string, apiKey: string) => {
+    if (!validateSender(event)) return { success: false, error: "Invalid request" }
+    if (!service || !apiKey || typeof service !== "string" || typeof apiKey !== "string") {
+      return { success: false, error: "Invalid service or API key" }
+    }
+
+    try {
+      if (service === "amp") {
+        // For AMP, we can do a simple test by trying to run a basic command
+        // Since AMP requires authentication, we'll check if the API key is set properly
+        const { spawn } = require("child_process")
+        const testProc = spawn("amp", ["--help"], {
+          env: { ...process.env, AMP_API_KEY: apiKey },
+          timeout: 5000,
+        })
+
+        return new Promise((resolve) => {
+          testProc.on("close", (code: number) => {
+            // If it exits with 0, the API key is likely valid (help command worked)
+            resolve({ success: code === 0 })
+          })
+          testProc.on("error", () => {
+            resolve({ success: false, error: "Failed to execute AMP command" })
+          })
+        })
+      }
+
+      return { success: false, error: "Unknown service" }
+    } catch (error) {
+      console.error(`Failed to test ${service} API key:`, error)
+      return { success: false, error: "Test failed" }
+    }
+  })
+
+  // CLI login flow - opens browser for OAuth authentication
+  ipcMain.handle("cli:open-login-flow", async (event, cli: string) => {
+    if (!validateSender(event)) return
+
+    const { spawn } = require("child_process")
+    
+    // CLI-specific login commands that open browser for OAuth
+    const loginCommands: Record<string, { cmd: string; args: string[] }> = {
+      amp: { cmd: "amp", args: ["login"] },
+      droid: { cmd: "droid", args: [] }, // droid interactive mode handles login
+      cursor: { cmd: "cursor", args: ["--login"] },
+      opencode: { cmd: "opencode", args: ["auth", "login"] },
+    }
+
+    const config = loginCommands[cli]
+    if (!config) {
+      console.error(`[CLI] Unknown CLI for login: ${cli}`)
+      return
+    }
+
+    console.log(`[CLI] Starting login flow for ${cli}`)
+
+    // Spawn the login command - it will open a browser for OAuth
+    const proc = spawn(config.cmd, config.args, {
+      env: { ...process.env },
+      stdio: "ignore", // Don't capture output, let it do its thing
+      detached: true, // Run independently
+    })
+
+    // Don't wait for the process - it opens browser and may stay running
+    proc.unref()
+  })
+
+  // CLI command runner - for checking auth status
+  ipcMain.handle("cli:run-command", async (event, command: string) => {
+    if (!validateSender(event)) return { exitCode: 1, stdout: "", stderr: "Invalid request" }
+
+    const { exec } = require("child_process")
+    const { promisify } = require("util")
+    const execAsync = promisify(exec)
+
+    try {
+      const { stdout, stderr } = await execAsync(command, {
+        timeout: 10000, // 10 second timeout
+        env: { ...process.env },
+      })
+      return { exitCode: 0, stdout: stdout || "", stderr: stderr || "" }
+    } catch (error: any) {
+      return {
+        exitCode: error.code || 1,
+        stdout: error.stdout || "",
+        stderr: error.stderr || error.message || "",
+      }
+    }
+  })
 }
 
 // Current window reference

@@ -25,7 +25,7 @@ export type UIMessageChunk =
   | { type: "tool-output-error"; toolCallId: string; errorText: string }
   // Error & metadata
   | { type: "error"; errorText: string }
-  | { type: "auth-error"; errorText: string }
+  | { type: "auth-error"; errorText: string; cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" }
   | {
       type: "ask-user-question"
       toolUseId: string

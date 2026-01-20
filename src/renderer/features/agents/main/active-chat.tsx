@@ -87,6 +87,7 @@ import {
   isPlanModeAtom,
   justCreatedIdsAtom,
   lastSelectedModelIdAtom,
+  lastSelectedModelPerAgentAtom,
   loadingSubChatsAtom,
   pendingAuthRetryMessageAtom,
   pendingPrMessageAtom,
@@ -164,7 +165,7 @@ import {
   clearSubChatDraft,
   getSubChatDraft,
 } from "../lib/drafts"
-const clearSubChatSelectionAtom = atom(null, () => {})
+const clearSubChatSelectionAtom = atom(null, () => { })
 const isSubChatMultiSelectModeAtom = atom(false)
 const selectedSubChatIdsAtom = atom(new Set<string>())
 // import { selectedTeamIdAtom } from "@/lib/atoms/team"
@@ -249,18 +250,22 @@ const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
   </svg>
 )
 
-// Model options for Claude Code
-const claudeModels = [
-  { id: "opus", name: "Opus" },
-  { id: "sonnet", name: "Sonnet" },
-  { id: "haiku", name: "Haiku" },
-]
+// Model options - imported from shared config
+import {
+  claudeCodeModels as claudeModels,
+  openCodeModels,
+  cursorModels,
+  ampModels,
+  droidModels,
+} from "../../../../shared/models"
 
 // Agent providers
 const agents = [
   { id: "claude-code", name: "Claude Code", hasModels: true },
-  { id: "cursor", name: "Cursor CLI", disabled: true },
-  { id: "codex", name: "OpenAI Codex", disabled: true },
+  { id: "opencode", name: "OpenCode", hasModels: true },
+  { id: "cursor", name: "Cursor", hasModels: true },
+  { id: "amp", name: "AMP", hasModels: true },
+  { id: "droid", name: "Droid", hasModels: true },
 ]
 
 // Helper function to get agent icon
@@ -268,10 +273,16 @@ const getAgentIcon = (agentId: string, className?: string) => {
   switch (agentId) {
     case "claude-code":
       return <ClaudeCodeIcon className={className} />
+    case "opencode":
+      return <CodexIcon className={className} />
     case "cursor":
       return <CursorIcon className={className} />
     case "codex":
       return <CodexIcon className={className} />
+    case "amp":
+      return <span className={className}>⚡</span>
+    case "droid":
+      return <span className={className}>🤖</span>
     default:
       return null
   }
@@ -947,11 +958,63 @@ function ChatViewInner({
   const [lastSelectedModelId, setLastSelectedModelId] = useAtom(
     lastSelectedModelIdAtom,
   )
-  const [selectedAgent, setSelectedAgent] = useState(() => agents[0])
-  const [selectedModel, setSelectedModel] = useState(
-    () =>
-      claudeModels.find((m) => m.id === lastSelectedModelId) || claudeModels[1],
+  const [lastSelectedModelPerAgent, setLastSelectedModelPerAgent] = useAtom(
+    lastSelectedModelPerAgentAtom,
   )
+
+  // Get available models for selected agent
+  const getModelsForAgent = (agentId: string) => {
+    switch (agentId) {
+      case "claude-code":
+        return claudeModels
+      case "opencode":
+        return openCodeModels
+      case "cursor":
+        return cursorModels
+      case "amp":
+        return ampModels
+      case "droid":
+        return droidModels
+      default:
+        return claudeModels
+    }
+  }
+
+  // Get default model for agent
+  const getDefaultModelForAgent = (agentId: string) => {
+    const models = getModelsForAgent(agentId)
+    const savedModelId = lastSelectedModelPerAgent[agentId]
+    return models.find((m) => m.id === savedModelId) || models[1] || models[0]
+  }
+
+  // Get current subchat's CLI to determine agent
+  // Get subchat from store (which has CLI info from DB)
+  const currentSubChatMeta = useAgentSubChatStore.getState().allSubChats.find((sc) => sc.id === subChatId)
+  // Also check DB subchats if available (from parent component)
+  // For now, default to claude-code and let the model selection work
+  const currentCli = "claude-code" // Default, will be updated when we have subchat data
+  const currentAgent = agents.find((a) => a.id === currentCli) || agents[0]
+
+  const [selectedAgent, setSelectedAgent] = useState(() => currentAgent)
+  const [selectedModel, setSelectedModel] = useState(
+    () => getDefaultModelForAgent(currentCli),
+  )
+
+  // Update selected agent and model when subchat changes
+  // Note: We'll get the actual CLI from the subchat when it's available
+  // For now, this will update when subChatId changes
+  useEffect(() => {
+    // Try to get CLI from store or default to claude-code
+    const subChatMeta = useAgentSubChatStore.getState().allSubChats.find((sc) => sc.id === subChatId)
+    // The CLI is stored in the DB subchat, but we don't have direct access here
+    // So we'll default to claude-code for now - the model selection will still work
+    const cli = "claude-code"
+    const newAgent = agents.find((a) => a.id === cli) || agents[0]
+    setSelectedAgent(newAgent)
+    const newModel = getDefaultModelForAgent(cli)
+    setSelectedModel(newModel)
+  }, [subChatId])
+
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const [shouldOpenClaudeSubmenu, setShouldOpenClaudeSubmenu] = useState(false)
 
@@ -2206,8 +2269,8 @@ function ChatViewInner({
                               "text-foreground px-2",
                               // Only show Summary styling if there are steps to collapse
                               isFinalText &&
-                                visibleStepsCount > 0 &&
-                                "pt-3 border-t border-border/50",
+                              visibleStepsCount > 0 &&
+                              "pt-3 border-t border-border/50",
                             )}
                           >
                             {/* Only show Summary label if there are steps to collapse */}
@@ -2599,8 +2662,8 @@ function ChatViewInner({
         className={cn(
           "px-2 pb-2 shadow-sm shadow-background relative z-10",
           (isStreaming || changedFilesForSubChat.length > 0) &&
-            !(pendingQuestions?.subChatId === subChatId) &&
-            "-mt-3 pt-3",
+          !(pendingQuestions?.subChatId === subChatId) &&
+          "-mt-3 pt-3",
         )}
       >
         <div className="w-full max-w-2xl mx-auto">
@@ -2861,50 +2924,61 @@ function ChatViewInner({
                         )}
                     </DropdownMenu>
 
-                    {/* Model selector */}
-                    <DropdownMenu
-                      open={isModelDropdownOpen}
-                      onOpenChange={setIsModelDropdownOpen}
-                    >
-                      <DropdownMenuTrigger asChild>
-                        <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                          <ClaudeCodeIcon className="h-3.5 w-3.5" />
-                          <span>
-                            {selectedModel?.name}{" "}
-                            <span className="text-muted-foreground">4.5</span>
-                          </span>
-                          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-[150px]">
-                        {claudeModels.map((model) => {
-                          const isSelected = selectedModel?.id === model.id
-                          return (
-                            <DropdownMenuItem
-                              key={model.id}
-                              onClick={() => {
-                                setSelectedModel(model)
-                                setLastSelectedModelId(model.id)
-                              }}
-                              className="gap-2 justify-between"
-                            >
-                              <div className="flex items-center gap-1.5">
-                                <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                <span>
-                                  {model.name}{" "}
-                                  <span className="text-muted-foreground">
-                                    4.5
-                                  </span>
-                                </span>
-                              </div>
-                              {isSelected && (
-                                <CheckIcon className="h-3.5 w-3.5 shrink-0" />
+                    {/* Model selector - only show for agents with models */}
+                    {selectedAgent.hasModels && (
+                      <DropdownMenu
+                        open={isModelDropdownOpen}
+                        onOpenChange={setIsModelDropdownOpen}
+                      >
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
+                            {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5")}
+                            <span>
+                              {selectedModel?.name}
+                              {selectedAgent.id === "claude-code" && (
+                                <span className="text-muted-foreground"> 4.5</span>
                               )}
-                            </DropdownMenuItem>
-                          )
-                        })}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                            </span>
+                            <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-[150px]">
+                          {getModelsForAgent(selectedAgent.id).map((model) => {
+                            const isSelected = selectedModel?.id === model.id
+                            return (
+                              <DropdownMenuItem
+                                key={model.id}
+                                onClick={() => {
+                                  setSelectedModel(model)
+                                  setLastSelectedModelPerAgent((prev) => ({
+                                    ...prev,
+                                    [selectedAgent.id]: model.id,
+                                  }))
+                                  // Also update legacy atom for backward compatibility
+                                  if (selectedAgent.id === "claude-code") {
+                                    setLastSelectedModelId(model.id)
+                                  }
+                                }}
+                                className="gap-2 justify-between"
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5 text-muted-foreground shrink-0")}
+                                  <span>
+                                    {model.name}
+                                    {selectedAgent.id === "claude-code" && (
+                                      <span className="text-muted-foreground"> 4.5</span>
+                                    )}
+                                  </span>
+                                </div>
+                                {isSelected && (
+                                  <CheckIcon className="h-3.5 w-3.5 shrink-0" />
+                                )}
+                              </DropdownMenuItem>
+                            )
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
@@ -2943,10 +3017,10 @@ function ChatViewInner({
                     <div className="ml-1">
                       {/* Show "Implement plan" button when plan is ready and input is empty */}
                       {hasUnapprovedPlan &&
-                      !hasContent &&
-                      images.length === 0 &&
-                      files.length === 0 &&
-                      !isStreaming ? (
+                        !hasContent &&
+                        images.length === 0 &&
+                        files.length === 0 &&
+                        !isStreaming ? (
                         <Button
                           onClick={handleApprovePlan}
                           size="sm"
@@ -3203,6 +3277,7 @@ export function ChatView({
     id: string
     name?: string | null
     mode?: "plan" | "agent" | null
+    cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | null
     created_at?: Date | string | null
     updated_at?: Date | string | null
     messages?: any
@@ -3692,21 +3767,23 @@ export function ChatView({
       const subChat = agentSubChats.find((sc) => sc.id === subChatId)
       const messages = (subChat?.messages as any[]) || []
 
-      // Get mode from store metadata (falls back to current isPlanMode)
+      // Get mode and cli from store metadata (falls back to defaults)
       const subChatMeta = useAgentSubChatStore
         .getState()
         .allSubChats.find((sc) => sc.id === subChatId)
       const subChatMode = subChatMeta?.mode || (isPlanMode ? "plan" : "agent")
+      const subChatCli = (subChat?.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid") || "claude-code"
 
       // Desktop: use IPCChatTransport for local Claude Code execution
       // Note: Extended thinking setting is read dynamically inside the transport
       const transport = worktreePath
         ? new IPCChatTransport({
-            chatId,
-            subChatId,
-            cwd: worktreePath,
-            mode: subChatMode,
-          })
+          chatId,
+          subChatId,
+          cwd: worktreePath,
+          mode: subChatMode,
+          cli: subChatCli,
+        })
         : null // Web transport not supported in desktop app
 
       if (!transport) {
@@ -3759,7 +3836,7 @@ export function ChatView({
                 try {
                   const audio = new Audio("./sound.mp3")
                   audio.volume = 1.0
-                  audio.play().catch(() => {})
+                  audio.play().catch(() => { })
                 } catch {
                   // Ignore audio errors
                 }
@@ -3800,11 +3877,16 @@ export function ChatView({
     const store = useAgentSubChatStore.getState()
     const subChatMode = isPlanMode ? "plan" : "agent"
 
+    // Inherit CLI from active sub-chat, or default to claude-code
+    const activeSubChat = agentSubChats.find((sc) => sc.id === store.activeSubChatId)
+    const inheritedCli = (activeSubChat?.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid") || "claude-code"
+
     // Create sub-chat in DB first to get the real ID
     const newSubChat = await trpcClient.chats.createSubChat.mutate({
       chatId,
       name: "New Agent",
       mode: subChatMode,
+      cli: inheritedCli,
     })
     const newId = newSubChat.id
 
@@ -3825,13 +3907,15 @@ export function ChatView({
 
     // Create empty Chat instance for the new sub-chat
     if (worktreePath) {
-      // Desktop: use IPCChatTransport for local Claude Code execution
+      // Desktop: use IPCChatTransport for local CLI execution
       // Note: Extended thinking setting is read dynamically inside the transport
+      const newSubChatCli = (newSubChat.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid") || "claude-code"
       const transport = new IPCChatTransport({
         chatId,
         subChatId: newId,
         cwd: worktreePath,
         mode: subChatMode,
+        cli: newSubChatCli,
       })
 
       const newChat = new Chat<any>({
@@ -3878,7 +3962,7 @@ export function ChatView({
                 try {
                   const audio = new Audio("./sound.mp3")
                   audio.volume = 1.0
-                  audio.play().catch(() => {})
+                  audio.play().catch(() => { })
                 } catch {
                   // Ignore audio errors
                 }
@@ -3906,6 +3990,7 @@ export function ChatView({
     setUnseenChanges,
     notifyAgentComplete,
     agentChat?.name,
+    agentSubChats,
   ])
 
   // Keyboard shortcut: New sub-chat
@@ -4516,7 +4601,7 @@ export function ChatView({
                           <div className="ml-1">
                             <AgentSendButton
                               disabled={true}
-                              onClick={() => {}}
+                              onClick={() => { }}
                             />
                           </div>
                         </div>

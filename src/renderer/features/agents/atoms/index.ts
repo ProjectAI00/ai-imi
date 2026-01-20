@@ -174,6 +174,21 @@ export const lastSelectedModelIdAtom = atomWithStorage<string>(
   { getOnInit: true },
 )
 
+// Per-agent model selection storage
+// Maps agentId -> modelId
+export const lastSelectedModelPerAgentAtom = atomWithStorage<Record<string, string>>(
+  "agents:lastSelectedModelPerAgent",
+  {
+    "claude-code": "sonnet",
+    "opencode": "sonnet",
+    "cursor": "sonnet",
+    "amp": "claude-4.5-opus",
+    "droid": "claude-3-5-sonnet",
+  },
+  undefined,
+  { getOnInit: true },
+)
+
 export const isPlanModeAtom = atomWithStorage<boolean>(
   "agents:isPlanMode",
   false,
@@ -181,11 +196,31 @@ export const isPlanModeAtom = atomWithStorage<boolean>(
   { getOnInit: true },
 )
 
-// Model ID to full Claude model string mapping
+// Model ID to full model string mapping per agent
 export const MODEL_ID_MAP: Record<string, string> = {
+  // Claude Code models
   opus: "opus",
   sonnet: "sonnet",
   haiku: "haiku",
+  // OpenCode models (short names that get resolved to full provider/model format)
+  "opencode-opus": "opus",
+  "opencode-sonnet": "sonnet",
+  "opencode-haiku": "haiku",
+  "opencode-gpt-4": "gpt-4",
+  "opencode-gpt-4o": "gpt-4o",
+  "opencode-gpt-4-turbo": "gpt-4-turbo",
+  // Cursor models (similar to Claude Code)
+  "cursor-opus": "opus",
+  "cursor-sonnet": "sonnet",
+  "cursor-haiku": "haiku",
+  // AMP models (only supports Claude 4.5 Opus)
+  "claude-4.5-opus": "claude-4.5-opus",
+  // Droid models
+  "droid-claude-3-5-sonnet": "claude-3-5-sonnet",
+  "droid-claude-3-opus": "claude-3-opus",
+  "droid-claude-3-haiku": "claude-3-haiku",
+  "droid-gpt-4": "gpt-4",
+  "droid-gpt-4o": "gpt-4o",
 }
 
 // Sidebar state

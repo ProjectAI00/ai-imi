@@ -36,6 +36,20 @@
       "when": 1768199613729,
       "tag": "0004_melted_prism",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1768819775598,
+      "tag": "0005_vengeful_loners",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1768908749637,
+      "tag": "0006_soft_captain_britain",
+      "breakpoints": true
     }
   ]
 }

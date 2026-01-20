@@ -11,13 +11,15 @@ import {
   SlidersFilledIcon,
 } from "../../icons"
 import { SkillIcon } from "../ui/icons"
+import { Key } from "lucide-react"
 import { AgentsAppearanceTab } from "./settings-tabs/agents-appearance-tab"
 import { AgentsProfileTab } from "./settings-tabs/agents-profile-tab"
 import { AgentsPreferencesTab } from "./settings-tabs/agents-preferences-tab"
+import { AgentsIntegrationsTab } from "./settings-tabs/agents-integrations-tab"
 import { AgentsDebugTab } from "./settings-tabs/agents-debug-tab"
 import { AgentsSkillsTab } from "./settings-tabs/agents-skills-tab"
 
-type SettingsTab = "profile" | "appearance" | "preferences" | "skills" | "debug"
+type SettingsTab = "profile" | "appearance" | "preferences" | "integrations" | "skills" | "debug"
 
 // Hook to detect narrow screen
 function useIsNarrowScreen(): boolean {
@@ -62,6 +64,12 @@ const ALL_TABS = [
     label: "Preferences",
     icon: SlidersFilledIcon,
     description: "Claude behavior settings",
+  },
+  {
+    id: "integrations" as SettingsTab,
+    label: "Integrations",
+    icon: Key,
+    description: "API keys and third-party services",
   },
   {
     id: "skills" as SettingsTab,
@@ -193,6 +201,8 @@ export function AgentsSettingsDialog({
         return <AgentsAppearanceTab />
       case "preferences":
         return <AgentsPreferencesTab />
+      case "integrations":
+        return <AgentsIntegrationsTab />
       case "skills":
         return <AgentsSkillsTab />
       case "debug":

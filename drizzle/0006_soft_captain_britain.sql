@@ -1,0 +1,42 @@
+CREATE TABLE `agents` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`description` text NOT NULL,
+	`tone` text DEFAULT 'professional' NOT NULL,
+	`verbosity` text DEFAULT 'balanced' NOT NULL,
+	`style` text,
+	`tools` text DEFAULT '[]' NOT NULL,
+	`default_cli` text DEFAULT 'claude-code',
+	`default_model` text,
+	`max_iterations` integer DEFAULT 10,
+	`system_prompt` text NOT NULL,
+	`special_instructions` text,
+	`created_at` integer,
+	`updated_at` integer
+);
+--> statement-breakpoint
+CREATE TABLE `tasks` (
+	`id` text PRIMARY KEY NOT NULL,
+	`title` text NOT NULL,
+	`description` text NOT NULL,
+	`context` text,
+	`linked_files` text DEFAULT '[]',
+	`project_id` text,
+	`assignee_type` text DEFAULT 'ai' NOT NULL,
+	`agent_id` text,
+	`team_id` text,
+	`tags` text DEFAULT '[]',
+	`time_frame` text DEFAULT 'this_week' NOT NULL,
+	`due_date` integer,
+	`priority` text DEFAULT 'medium' NOT NULL,
+	`status` text DEFAULT 'todo' NOT NULL,
+	`chat_id` text,
+	`summary` text,
+	`created_at` integer,
+	`updated_at` integer,
+	`completed_at` integer,
+	`created_by` text DEFAULT 'user' NOT NULL,
+	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`chat_id`) REFERENCES `chats`(`id`) ON UPDATE no action ON DELETE set null
+);

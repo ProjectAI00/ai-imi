@@ -19,6 +19,7 @@ import { useAgentsHotkeys } from "../agents/lib/agents-hotkeys-manager"
 import { AgentsSettingsDialog } from "../../components/dialogs/agents-settings-dialog"
 import { AgentsShortcutsDialog } from "../../components/dialogs/agents-shortcuts-dialog"
 import { ClaudeLoginModal } from "../../components/dialogs/claude-login-modal"
+import { CliLoginModal } from "../../components/dialogs/cli-login-modal"
 import { TooltipProvider } from "../../components/ui/tooltip"
 import { ResizableSidebar } from "../../components/ui/resizable-sidebar"
 import { AgentsSidebar } from "../sidebar/agents-sidebar"
@@ -223,6 +224,7 @@ export function AgentsLayout() {
         onClose={() => setShortcutsOpen(false)}
       />
       <ClaudeLoginModal />
+      <CliLoginModal />
       <div className="flex w-full h-full relative overflow-hidden bg-background select-none">
         {/* Left Sidebar (Agents) */}
         <ResizableSidebar
