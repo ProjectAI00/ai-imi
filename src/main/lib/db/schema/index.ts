@@ -71,7 +71,7 @@ export const subChats = sqliteTable("sub_chats", {
   sessionId: text("session_id"), // Claude SDK session ID for resume
   streamId: text("stream_id"), // Track in-progress streams
   mode: text("mode").notNull().default("agent"), // "plan" | "agent"
-  cli: text("cli").notNull().default("claude-code"), // "claude-code" | "opencode" | "cursor"
+  cli: text("cli").notNull().default("claude-code"), // "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
   model: text("model"), // Model ID (e.g., "opus", "sonnet", "gpt-4")
   messages: text("messages").notNull().default("[]"), // JSON array
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
@@ -133,6 +133,64 @@ export const agentsRelations = relations(agents, ({ many }) => ({
   tasks: many(tasks),
 }))
 
+// ============ GOALS ============
+// High-level objectives that group related plans and tasks
+export const goals = sqliteTable("goals", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  workspaceId: text("workspace_id").references(() => projects.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("todo"), // todo | ongoing | review | done
+  priority: text("priority").notNull().default("medium"),
+  context: text("context"),
+  tags: text("tags").default("[]"), // JSON array
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+})
+
+export const goalsRelations = relations(goals, ({ one, many }) => ({
+  workspace: one(projects, {
+    fields: [goals.workspaceId],
+    references: [projects.id],
+  }),
+  plans: many(plans),
+}))
+
+// ============ PLANS ============
+// Execution plans that break down goals into steps
+export const plans = sqliteTable("plans", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => createId()),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  goalId: text("goal_id").references(() => goals.id, { onDelete: "set null" }),
+  steps: text("steps").notNull().default("[]"), // JSON PlanStep[]
+  approvalStatus: text("approval_status").notNull().default("draft"), // draft | awaiting_approval | approved | rejected
+  status: text("status").notNull().default("todo"),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date(),
+  ),
+})
+
+export const plansRelations = relations(plans, ({ one, many }) => ({
+  goal: one(goals, {
+    fields: [plans.goalId],
+    references: [goals.id],
+  }),
+  tasks: many(tasks),
+}))
+
 // ============ TASKS ============
 // Work items created via Task Builder
 export const tasks = sqliteTable("tasks", {
@@ -160,6 +218,12 @@ export const tasks = sqliteTable("tasks", {
   // Execution
   chatId: text("chat_id").references(() => chats.id, { onDelete: "set null" }), // Linked chat thread
   summary: text("summary"), // AI summary when done
+  // Goal & Plan links
+  goalId: text("goal_id").references(() => goals.id, { onDelete: "set null" }),
+  planId: text("plan_id").references(() => plans.id, { onDelete: "set null" }),
+  // Execution format for CLI export
+  executionFormat: text("execution_format").default("json"), // yaml | json | toom | ralphy
+  executionPayload: text("execution_payload"), // Serialized payload for CLI
   // Meta
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
     () => new Date(),
@@ -184,6 +248,14 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
     fields: [tasks.chatId],
     references: [chats.id],
   }),
+  goal: one(goals, {
+    fields: [tasks.goalId],
+    references: [goals.id],
+  }),
+  plan: one(plans, {
+    fields: [tasks.planId],
+    references: [plans.id],
+  }),
 }))
 
 // ============ TYPE EXPORTS ============
@@ -199,3 +271,7 @@ export type Agent = typeof agents.$inferSelect
 export type NewAgent = typeof agents.$inferInsert
 export type Task = typeof tasks.$inferSelect
 export type NewTask = typeof tasks.$inferInsert
+export type Goal = typeof goals.$inferSelect
+export type NewGoal = typeof goals.$inferInsert
+export type Plan = typeof plans.$inferSelect
+export type NewPlan = typeof plans.$inferInsert

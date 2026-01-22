@@ -324,4 +324,151 @@ export const tasksRouter = router({
   getEmptySkeleton: publicProcedure.query(() => {
     return createEmptyTaskSkeleton()
   }),
+
+  /**
+   * Delegate task to agent for execution
+   */
+  delegate: publicProcedure
+    .input(
+      z.object({
+        taskId: z.string(),
+        agentId: z.string().optional(),
+        format: z.enum(["yaml", "json", "toom", "ralphy"]).default("json"),
+      })
+    )
+    .mutation(({ input }) => {
+      const db = getDatabase()
+
+      const task = db.select().from(tasks).where(eq(tasks.id, input.taskId)).get()
+
+      if (!task) {
+        throw new Error("Task not found")
+      }
+
+      // Get agent context if provided
+      let agentContext: string | undefined
+      if (input.agentId) {
+        const agent = db.select().from(agents).where(eq(agents.id, input.agentId)).get()
+        if (agent) {
+          agentContext = agent.systemPrompt
+        }
+      }
+
+      // Parse JSON fields
+      const taskWithParsedFields = {
+        ...task,
+        linkedFiles: JSON.parse(task.linkedFiles || "[]") as string[],
+        tags: JSON.parse(task.tags || "[]") as string[],
+      }
+
+      // Generate execution payload based on format
+      let executionPayload: string
+      const basePayload = {
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        context: task.context,
+        linkedFiles: taskWithParsedFields.linkedFiles,
+        priority: task.priority,
+        agentContext,
+      }
+
+      switch (input.format) {
+        case "yaml":
+          executionPayload = Object.entries(basePayload)
+            .filter(([_, v]) => v !== undefined && v !== null)
+            .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
+            .join("\n")
+          break
+        case "toom":
+        case "ralphy":
+          executionPayload = `# Task: ${task.title}\n\n${task.description}\n\n${task.context ? `## Context\n${task.context}\n\n` : ""}${taskWithParsedFields.linkedFiles.length > 0 ? `## Files\n${taskWithParsedFields.linkedFiles.join("\n")}` : ""}`
+          break
+        case "json":
+        default:
+          executionPayload = JSON.stringify(basePayload, null, 2)
+      }
+
+      // Update task with delegation info
+      return db
+        .update(tasks)
+        .set({
+          agentId: input.agentId || task.agentId,
+          status: "in_progress",
+          updatedAt: new Date(),
+        })
+        .where(eq(tasks.id, input.taskId))
+        .returning()
+        .get()
+    }),
+
+  /**
+   * Get execution payload for CLI injection
+   */
+  getExecutionPayload: publicProcedure
+    .input(
+      z.object({
+        taskId: z.string(),
+        format: z.enum(["yaml", "json", "toom", "ralphy"]).optional(),
+      })
+    )
+    .query(({ input }) => {
+      const db = getDatabase()
+
+      const task = db.select().from(tasks).where(eq(tasks.id, input.taskId)).get()
+
+      if (!task) {
+        throw new Error("Task not found")
+      }
+
+      // Get agent context if assigned
+      let agentContext: string | undefined
+      if (task.agentId) {
+        const agent = db.select().from(agents).where(eq(agents.id, task.agentId)).get()
+        if (agent) {
+          agentContext = agent.systemPrompt
+        }
+      }
+
+      // Parse JSON fields
+      const taskWithParsedFields = {
+        ...task,
+        linkedFiles: JSON.parse(task.linkedFiles || "[]") as string[],
+        tags: JSON.parse(task.tags || "[]") as string[],
+      }
+
+      const format = input.format || "json"
+      const basePayload = {
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        context: task.context,
+        linkedFiles: taskWithParsedFields.linkedFiles,
+        priority: task.priority,
+        agentContext,
+      }
+
+      switch (format) {
+        case "yaml":
+          return {
+            format: "yaml",
+            payload: Object.entries(basePayload)
+              .filter(([_, v]) => v !== undefined && v !== null)
+              .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
+              .join("\n"),
+          }
+        case "toom":
+        case "ralphy":
+          return {
+            format,
+            payload: `# Task: ${task.title}\n\n${task.description}\n\n${task.context ? `## Context\n${task.context}\n\n` : ""}${taskWithParsedFields.linkedFiles.length > 0 ? `## Files\n${taskWithParsedFields.linkedFiles.join("\n")}` : ""}`,
+          }
+        case "json":
+        default:
+          return {
+            format: "json",
+            payload: JSON.stringify(basePayload, null, 2),
+          }
+      }
+    }),
 })
