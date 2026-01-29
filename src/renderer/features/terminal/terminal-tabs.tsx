@@ -204,8 +204,8 @@ const TerminalTab = memo(
               />
             )}
 
-            {/* Close button - only show when hovered and multiple tabs */}
-            {!isOnly && !isEditing && (
+            {/* Close button - show when hovered (always visible, even for single terminal) */}
+            {!isEditing && (
               <div className="absolute right-0 top-0 bottom-0 flex items-center justify-end pr-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
                 <div
                   className={cn(
@@ -234,7 +234,6 @@ const TerminalTab = memo(
           <ContextMenuSeparator />
           <ContextMenuItem
             onClick={() => onClose(terminal.id)}
-            disabled={isOnly}
           >
             Close terminal
           </ContextMenuItem>

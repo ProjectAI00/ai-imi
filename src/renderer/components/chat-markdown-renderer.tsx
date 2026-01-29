@@ -11,19 +11,23 @@ import { highlightCode } from "../lib/themes/shiki-theme-loader"
 // Function to strip emojis from text (only common emojis, preserving markdown symbols)
 export function stripEmojis(text: string): string {
   return text
-    .replace(/[\u{1F600}-\u{1F64F}]/gu, "") // Emoticons
-    .replace(/[\u{1F300}-\u{1F5FF}]/gu, "") // Misc Symbols and Pictographs
-    .replace(/[\u{1F680}-\u{1F6FF}]/gu, "") // Transport and Map
-    .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, "") // Flags
-    .replace(/[\u{1F900}-\u{1F9FF}]/gu, "") // Supplemental Symbols
-    .replace(/[\u{1FA00}-\u{1FAFF}]/gu, "") // Extended-A
-    .replace(/[\u{2700}-\u{27BF}]/gu, "") // Dingbats
+    .replace(/[\u{1F600}-\u{1F64F}]/gu, " ") // Emoticons
+    .replace(/[\u{1F300}-\u{1F5FF}]/gu, " ") // Misc Symbols and Pictographs
+    .replace(/[\u{1F680}-\u{1F6FF}]/gu, " ") // Transport and Map
+    .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, " ") // Flags
+    .replace(/[\u{1F900}-\u{1F9FF}]/gu, " ") // Supplemental Symbols
+    .replace(/[\u{1FA00}-\u{1FAFF}]/gu, " ") // Extended-A
+    .replace(/[\u{2700}-\u{27BF}]/gu, " ") // Dingbats
 }
 
 // Function to fix numbered list items that have line breaks after the number
 // Converts "1.\n\nText" or "1.\n  \nText" to "1. Text"
 function fixNumberedListBreaks(text: string): string {
   return text.replace(/^(\d+)\.\s*\n+\s*\n*/gm, "$1. ")
+}
+
+function fixNumberedListSpacing(text: string): string {
+  return text.replace(/(\d+\.\s[^.\n]+?)(?=(\d+\.\s))/g, "$1\n")
 }
 
 // Function to fix malformed bold/italic markdown where there's a space after opening markers
@@ -38,12 +42,46 @@ function fixMalformedEmphasis(text: string): string {
   return fixed
 }
 
+// Ensure a space after inline markdown tokens when followed by a word
+function fixInlineTokenSpacing(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+?)\*\*(?=\S)/g, "**$1** ")
+    .replace(/(?<!\*)\*([^*\n]+?)\*(?=\S)/g, "*$1* ")
+    .replace(/__([^_\n]+?)__(?=\S)/g, "__$1__ ")
+    .replace(/(?<!_)_([^_\n]+?)_(?=\S)/g, "_$1_ ")
+    .replace(/`([^`\n]+?)`(?=\S)/g, "`$1` ")
+}
+
+function stripTrailingModelSuffix(text: string): string {
+  return text.replace(
+    /\s*(?:\*\*)?(?:claude|gpt|gemini|o3|o4|sonnet|opus|haiku)[\w.\-/]*\s*$/i,
+    "",
+  )
+}
+
 // Escape HTML special characters for safe rendering
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
+}
+
+// Add paragraph breaks between sentences for better readability
+// Converts sentence endings to markdown paragraphs (double newlines)
+function addSentenceBreaks(text: string): string {
+  // Skip if text already has markdown formatting (contains double newlines, lists, headings, etc.)
+  if (text.includes("\n\n") || text.includes("\n-") || text.includes("\n#")) {
+    return text
+  }
+
+  // Split on sentence-ending punctuation followed by a space and capital letter
+  // This regex matches: . ! ? followed by space(s) and a capital letter
+  // But NOT: ... (ellipsis), .0 (decimals), etc.
+  return text.replace(
+    /([.!?])\s+(?=[A-Z])/g,
+    "$1\n\n"
+  )
 }
 
 // Code block text sizes matching paragraph text sizes
@@ -197,27 +235,27 @@ const sizeStyles: Record<
 > = {
   sm: {
     // Compact variant for sidebar/compact views
-    h1: "text-base font-semibold text-foreground mt-[1.4em] mb-px first:mt-0 leading-[1.3]",
-    h2: "text-base font-semibold text-foreground mt-[1.4em] mb-px first:mt-0 leading-[1.3]",
-    h3: "text-sm font-semibold text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
-    h4: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
-    h5: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
-    h6: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
-    p: "text-sm text-foreground/80 my-px leading-normal py-[3px]",
-    ul: "list-disc list-inside text-sm text-foreground/80 mb-px marker:text-foreground/60",
-    ol: "list-decimal list-inside text-sm text-foreground/80 mb-px marker:text-foreground/60",
-    li: "text-sm text-foreground/80 py-[3px]",
+    h1: "text-sm font-semibold text-foreground mt-[1.4em] mb-px first:mt-0 leading-[1.3]",
+    h2: "text-sm font-semibold text-foreground mt-[1.4em] mb-px first:mt-0 leading-[1.3]",
+    h3: "text-[13px] font-semibold text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
+    h4: "text-[13px] font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
+    h5: "text-[13px] font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
+    h6: "text-[13px] font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
+    p: "text-[13px] text-foreground/80 my-1 leading-normal py-[3px]",
+    ul: "list-disc list-inside text-[13px] text-foreground/80 mb-px marker:text-foreground/60",
+    ol: "list-decimal list-inside text-[13px] text-foreground/80 mb-px marker:text-foreground/60",
+    li: "text-[13px] text-foreground/80 py-[3px]",
     inlineCode:
       "bg-foreground/[0.06] dark:bg-foreground/[0.1] font-mono text-[85%] rounded px-[0.4em] py-[0.2em] break-all",
     blockquote:
-      "border-l-2 border-foreground/20 pl-3 text-foreground/70 mb-px text-sm",
+      "border-l-2 border-foreground/20 pl-3 text-foreground/70 mb-px text-[13px]",
     hr: "mt-6 mb-4 border-t border-border",
-    table: "w-full text-sm",
+    table: "w-full text-[13px]",
     thead: "border-b border-border",
     tbody: "",
     tr: "[&:not(:last-child)]:border-b [&:not(:last-child)]:border-border",
-    th: "text-left text-sm font-medium text-foreground px-3 py-2 bg-muted/50 border-r border-border last:border-r-0",
-    td: "text-sm text-foreground/80 px-3 py-2 border-r border-border last:border-r-0",
+    th: "text-left text-[13px] font-medium text-foreground px-3 py-2 bg-muted/50 border-r border-border last:border-r-0",
+    td: "text-[13px] text-foreground/80 px-3 py-2 border-r border-border last:border-r-0",
   },
   md: {
     // Default variant - matches Notion spacing
@@ -227,7 +265,7 @@ const sizeStyles: Record<
     h4: "text-base font-semibold text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
     h5: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
     h6: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
-    p: "text-sm text-foreground/80 my-px leading-normal py-[3px]",
+    p: "text-sm text-foreground/80 my-1 leading-normal py-[3px]",
     ul: "list-disc list-inside text-sm text-foreground/80 mb-px marker:text-foreground/60",
     ol: "list-decimal list-inside text-sm text-foreground/80 mb-px marker:text-foreground/60",
     li: "text-sm text-foreground/80 py-[3px]",
@@ -251,7 +289,7 @@ const sizeStyles: Record<
     h4: "text-base font-semibold text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
     h5: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
     h6: "text-sm font-medium text-foreground mt-[1em] mb-px first:mt-0 leading-[1.3]",
-    p: "text-sm text-foreground/80 my-px leading-normal py-[3px]",
+    p: "text-sm text-foreground/80 my-1 leading-normal py-[3px]",
     ul: "list-disc list-inside text-sm text-foreground/80 mb-px marker:text-foreground/60",
     ol: "list-decimal list-inside text-sm text-foreground/80 mb-px marker:text-foreground/60",
     li: "text-sm text-foreground/80 py-[3px]",
@@ -424,7 +462,19 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
     [styles, codeTheme, syntaxHighlight, size],
   )
 
-  const processedContent = fixMalformedEmphasis(fixNumberedListBreaks(stripEmojis(content)))
+  const processedContent = stripTrailingModelSuffix(
+    fixNumberedListSpacing(
+      fixInlineTokenSpacing(
+        fixMalformedEmphasis(
+          fixNumberedListBreaks(
+            addSentenceBreaks(
+              stripEmojis(content).replace(/ {2,}/g, " ").trim(),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
 
   return (
     <div

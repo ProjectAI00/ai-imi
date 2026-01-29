@@ -40,6 +40,7 @@ export const tasksRouter = router({
           status: statusSchema.optional(),
           projectId: z.string().optional(),
           agentId: z.string().optional(),
+          goalId: z.string().optional(),
           limit: z.number().optional(),
         })
         .optional()
@@ -58,6 +59,9 @@ export const tasksRouter = router({
       }
       if (input?.agentId) {
         conditions.push(eq(tasks.agentId, input.agentId))
+      }
+      if (input?.goalId) {
+        conditions.push(eq(tasks.goalId, input.goalId))
       }
 
       if (conditions.length > 0) {
@@ -400,6 +404,60 @@ export const tasksRouter = router({
         .where(eq(tasks.id, input.taskId))
         .returning()
         .get()
+    }),
+
+  /**
+   * Create tasks from Plan Mode builder output
+   */
+  createFromBuilder: publicProcedure
+    .input(
+      z.object({
+        goalId: z.string(),
+        tasks: z.array(
+          z.object({
+            title: z.string().min(1),
+            description: z.string().min(1),
+            priority: z.enum(["low", "medium", "high"]).default("medium"),
+            timeFrame: z.enum(["today", "tomorrow", "this_week", "next_week", "no_rush"]).default("this_week"),
+            context: z.string().optional(),
+            tags: z.array(z.string()).optional(),
+          })
+        ),
+        projectId: z.string().optional(),
+      })
+    )
+    .mutation(({ input }) => {
+      const db = getDatabase()
+
+      const createdIds: string[] = []
+
+      for (const taskInput of input.tasks) {
+        const dueDate = calculateDueDate(taskInput.timeFrame)
+
+        const task = db
+          .insert(tasks)
+          .values({
+            title: taskInput.title,
+            description: taskInput.description,
+            context: taskInput.context,
+            linkedFiles: "[]",
+            projectId: input.projectId,
+            goalId: input.goalId,
+            assigneeType: "ai",
+            tags: JSON.stringify(taskInput.tags || []),
+            timeFrame: taskInput.timeFrame,
+            dueDate,
+            priority: taskInput.priority,
+            status: "todo",
+            createdBy: "ai",
+          })
+          .returning()
+          .get()
+
+        createdIds.push(task.id)
+      }
+
+      return { ids: createdIds }
     }),
 
   /**

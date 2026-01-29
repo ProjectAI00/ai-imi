@@ -2,6 +2,14 @@ import { atom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
 import type { TerminalInstance } from "./types"
 
+// Right panel mode: "closed" | "terminal" | "chat"
+export const rightPanelModeAtom = atomWithStorage<"closed" | "terminal" | "chat">(
+  "right-panel-mode",
+  "closed",
+  undefined,
+  { getOnInit: true },
+)
+
 export const terminalSidebarOpenAtom = atomWithStorage<boolean>(
   "terminal-sidebar-open",
   false,

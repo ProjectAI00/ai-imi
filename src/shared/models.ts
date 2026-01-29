@@ -82,9 +82,30 @@ export const droidModels = [
 ] as const
 
 /**
+ * GitHub Copilot CLI models
+ * @see https://docs.github.com/copilot/concepts/agents/about-copilot-cli
+ */
+export const copilotModels = [
+    { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5" },
+    { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
+    { id: "claude-opus-4.5", name: "Claude Opus 4.5" },
+    { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+    { id: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
+    { id: "gpt-5.1-codex-max", name: "GPT-5.1 Codex Max" },
+    { id: "gpt-5.1-codex", name: "GPT-5.1 Codex" },
+    { id: "gpt-5.2", name: "GPT-5.2" },
+    { id: "gpt-5.1", name: "GPT-5.1" },
+    { id: "gpt-5", name: "GPT-5" },
+    { id: "gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini" },
+    { id: "gpt-5-mini", name: "GPT-5 mini" },
+    { id: "gpt-4.1", name: "GPT-4.1" },
+    { id: "gemini-3-pro-preview", name: "Gemini 3 Pro (Preview)" },
+] as const
+
+/**
  * CLI type union
  */
-export type CliType = "claude-code" | "opencode" | "cursor" | "amp" | "droid"
+export type CliType = "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
 
 /**
  * Get models for a given CLI
@@ -101,6 +122,8 @@ export function getModelsForCli(cli: CliType) {
             return ampModels
         case "droid":
             return droidModels
+        case "copilot":
+            return copilotModels
         default:
             return claudeCodeModels
     }
@@ -121,6 +144,8 @@ export function getDefaultModelId(cli: CliType): string {
             return "smart"
         case "droid":
             return "claude-opus-4-5-20251101"
+        case "copilot":
+            return "claude-sonnet-4.5"
         default:
             return "sonnet"
     }
@@ -135,4 +160,5 @@ export const AUTH_ERROR_MESSAGES = {
     "claude-code": "Authentication required. Please connect your Claude Code account in Settings.",
     amp: "Authentication required. Please configure your API keys with AMP.",
     droid: "Authentication required. Please configure your API keys with Droid.",
+    copilot: "Authentication required. Run `copilot /login` in your terminal to authenticate.",
 } as const

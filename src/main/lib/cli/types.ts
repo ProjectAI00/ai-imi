@@ -8,7 +8,7 @@ import type { UIMessageChunk } from "../claude/types"
  * Configuration for a CLI adapter
  */
 export interface CliConfig {
-  cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid"
+  cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
   cwd: string
   model?: string
   sessionId?: string
@@ -23,7 +23,7 @@ export interface ChatInput {
   chatId: string
   prompt: string
   cwd: string
-  cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid"
+  cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
   mode?: "plan" | "agent"
   sessionId?: string
   model?: string
@@ -32,8 +32,16 @@ export interface ChatInput {
     mediaType: string
     filename?: string
   }>
+  files?: Array<{
+    path: string
+    filename?: string
+    size?: number
+    mediaType?: string
+  }>
   /** Context from previous messages (for non-Claude CLIs) */
   contextHistory?: string
+  /** Root system prompt for consistent behavior across all CLIs */
+  rootSystemPrompt?: string
   /** API keys for third-party services */
   ampApiKey?: string
 }

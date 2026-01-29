@@ -14,6 +14,7 @@ import {
   MODEL_ID_MAP,
   pendingAuthRetryMessageAtom,
   pendingUserQuestionsAtom,
+  setStreamingActivityAtom,
 } from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
 
@@ -128,6 +129,23 @@ const ERROR_TOAST_CONFIG: Record<
       onClick: () => navigator.clipboard.writeText("opencode auth login"),
     },
   },
+  // Copilot CLI errors
+  COPILOT_NOT_INSTALLED: {
+    title: "GitHub Copilot CLI not found",
+    description: "Install GitHub Copilot CLI: https://github.com/github/copilot-cli",
+  },
+  COPILOT_AUTH_REQUIRED: {
+    title: "GitHub Copilot authentication required",
+    description: "Run 'copilot /login' in your terminal to authenticate.",
+    action: {
+      label: "Copy command",
+      onClick: () => navigator.clipboard.writeText("copilot /login"),
+    },
+  },
+  COPILOT_ERROR: {
+    title: "GitHub Copilot error",
+    description: "An error occurred with Copilot. Check your login and try again.",
+  },
 }
 
 type UIMessageChunk = any // Inferred from subscription
@@ -138,7 +156,9 @@ type IPCChatTransportConfig = {
   cwd: string
   mode: "plan" | "agent"
   model?: string
-  cli?: "claude-code" | "opencode" | "cursor"
+  cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
+  taskId?: string  // Task being executed (for state engine)
+  goalId?: string  // Goal being executed (orchestrator mode)
 }
 
 // Image attachment type matching the tRPC schema
@@ -146,6 +166,13 @@ type ImageAttachment = {
   base64Data: string
   mediaType: string
   filename?: string
+}
+
+type FileAttachment = {
+  path: string
+  filename?: string
+  size?: number
+  mediaType?: string
 }
 
 export class IPCChatTransport implements ChatTransport<UIMessage> {
@@ -161,6 +188,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
       .find((m) => m.role === "user")
     const prompt = this.extractText(lastUser)
     const images = this.extractImages(lastUser)
+    const files = this.extractFiles(lastUser)
+
+    // Debug: log extracted files
+    if (files.length > 0) {
+      console.log("[IPCChatTransport] Files extracted:", files)
+    }
 
     // Get sessionId for resume
     const lastAssistant = [...options.messages]
@@ -172,11 +205,16 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
     const maxThinkingTokens = thinkingEnabled ? 128_000 : undefined
 
+    // Read CLI selection dynamically from store (so CLI changes apply to existing chats)
+    const currentCli = useAgentSubChatStore
+      .getState()
+      .allSubChats.find((subChat) => subChat.id === this.config.subChatId)
+      ?.cli || this.config.cli || "claude-code"
+
     // Read model selection dynamically (so model changes apply to existing chats)
     // Use per-agent model selection if available, fallback to legacy atom
     const lastSelectedModelPerAgent = appStore.get(lastSelectedModelPerAgentAtom)
-    const cli = this.config.cli || "claude-code"
-    const selectedModelId = lastSelectedModelPerAgent[cli] || appStore.get(lastSelectedModelIdAtom)
+    const selectedModelId = lastSelectedModelPerAgent[currentCli] || appStore.get(lastSelectedModelIdAtom)
     const modelString = MODEL_ID_MAP[selectedModelId] || selectedModelId
 
     const currentMode =
@@ -189,10 +227,51 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const subId = this.config.subChatId.slice(-8)
     let chunkCount = 0
     let lastChunkType = ""
-    console.log(`[SD] R:START sub=${subId}`)
+    console.log(`[SD] R:START sub=${subId} cli=${currentCli}`)
 
     return new ReadableStream({
       start: (controller) => {
+        const setActivity = (text: string | null) => {
+          appStore.set(setStreamingActivityAtom, {
+            subChatId: this.config.subChatId,
+            text,
+          })
+        }
+        const inferActivityFromTool = (chunk: UIMessageChunk): string | null => {
+          if (chunk.type !== "tool-input-available") return null
+          const toolName = chunk.toolName
+          const input = (chunk as any).input || {}
+          switch (toolName) {
+            case "Read": {
+              const filePath = input.file_path || ""
+              const name = filePath.split("/").pop() || "file"
+              return `Reading ${name}`
+            }
+            case "Grep": {
+              const pattern = input.pattern ? `"${input.pattern}"` : ""
+              return pattern ? `Searching ${pattern}` : "Searching"
+            }
+            case "Glob": {
+              const pattern = input.pattern || ""
+              return pattern ? `Exploring ${pattern}` : "Exploring files"
+            }
+            case "Edit": {
+              const filePath = input.file_path || ""
+              const name = filePath.split("/").pop() || "file"
+              return `Editing ${name}`
+            }
+            case "Write": {
+              const filePath = input.file_path || ""
+              const name = filePath.split("/").pop() || "file"
+              return `Writing ${name}`
+            }
+            case "Bash":
+              return "Running command"
+            default:
+              return toolName ? `Running ${toolName}` : null
+          }
+        }
+
         const sub = trpcClient.claude.chat.subscribe(
           {
             subChatId: this.config.subChatId,
@@ -201,15 +280,24 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             cwd: this.config.cwd,
             mode: currentMode,
             sessionId,
-            cli: this.config.cli || "claude-code",
+            cli: currentCli,
             ...(maxThinkingTokens && { maxThinkingTokens }),
             ...(modelString && { model: modelString }),
             ...(images.length > 0 && { images }),
+            ...(files.length > 0 && { files }),
+            ...(this.config.taskId && { taskId: this.config.taskId }),
+            ...(this.config.goalId && { goalId: this.config.goalId }),
           },
           {
             onData: (chunk: UIMessageChunk) => {
               chunkCount++
               lastChunkType = chunk.type
+
+              // Update streaming activity label from tool calls
+              const inferred = inferActivityFromTool(chunk)
+              if (inferred) {
+                setActivity(inferred)
+              }
 
               // Debug: log all chunks when there's a pending question
               const currentPending = appStore.get(pendingUserQuestionsAtom)
@@ -245,18 +333,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 }
               }
 
-              // Clear pending questions on ANY other chunk type (agent moved on)
-              // Only clear if the pending question belongs to THIS sub-chat
-              if (chunk.type !== "ask-user-question" && chunk.type !== "ask-user-question-timeout") {
-                const pending = appStore.get(pendingUserQuestionsAtom)
-                if (pending && pending.subChatId === this.config.subChatId) {
-                  console.log("[PendingQ] Transport: Clearing pending question", {
-                    chunkType: chunk.type,
-                    pendingToolUseId: pending.toolUseId,
-                  })
-                  appStore.set(pendingUserQuestionsAtom, null)
-                }
-              }
+
 
               // Handle authentication errors - show appropriate login modal
               if (chunk.type === "auth-error") {
@@ -329,6 +406,16 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 }
               }
 
+              // Handle tasks-created - show success toast
+              if (chunk.type === "tasks-created" && chunk.tasks && chunk.tasks.length > 0) {
+                const taskCount = chunk.tasks.length
+                const taskTitles = chunk.tasks.map(t => t.title).join(", ")
+                toast.success(`${taskCount} task${taskCount > 1 ? "s" : ""} created`, {
+                  description: taskTitles.length > 100 ? taskTitles.slice(0, 100) + "..." : taskTitles,
+                  duration: 5000,
+                })
+              }
+
               // Try to enqueue, but don't crash if stream is already closed
               try {
                 controller.enqueue(chunk)
@@ -339,6 +426,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               if (chunk.type === "finish") {
                 console.log(`[SD] R:FINISH sub=${subId} n=${chunkCount}`)
+                setActivity(null)
                 try {
                   controller.close()
                 } catch {
@@ -348,6 +436,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             },
             onError: (err: Error) => {
               console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
+              setActivity(null)
               // Track transport errors in Sentry
               Sentry.captureException(err, {
                 tags: {
@@ -365,6 +454,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             },
             onComplete: () => {
               console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)
+              setActivity(null)
               // Fallback: clear any pending questions when stream completes
               // This handles edge cases where timeout chunk wasn't received
               const pending = appStore.get(pendingUserQuestionsAtom)
@@ -437,5 +527,27 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     }
 
     return images
+  }
+
+  private extractFiles(msg: UIMessage | undefined): FileAttachment[] {
+    if (!msg || !msg.parts) return []
+
+    const files: FileAttachment[] = []
+
+    for (const part of msg.parts) {
+      if (part.type === "data-file" && (part as any).data) {
+        const data = (part as any).data
+        if (data.path) {
+          files.push({
+            path: data.path,
+            filename: data.filename,
+            size: data.size,
+            mediaType: data.mediaType,
+          })
+        }
+      }
+    }
+
+    return files
   }
 }

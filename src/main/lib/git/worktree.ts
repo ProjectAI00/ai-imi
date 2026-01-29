@@ -112,6 +112,32 @@ function isEnoent(error: unknown): boolean {
 	);
 }
 
+export async function ensureGitRepo(folderPath: string): Promise<{
+	wasInitialized: boolean;
+	path: string;
+}> {
+	const git = simpleGit(folderPath);
+	const isRepo = await git.checkIsRepo();
+
+	if (isRepo) {
+		return { wasInitialized: false, path: folderPath };
+	}
+
+	await git.init();
+	await git.addConfig("user.name", "1Code Agent", false, "local");
+	await git.addConfig("user.email", "agent@local", false, "local");
+	await git.add("-A");
+
+	const status = await git.status();
+	if (status.staged.length > 0) {
+		await git.commit("Initial commit");
+	} else {
+		await git.commit("Workspace initialized", ["--allow-empty"]);
+	}
+
+	return { wasInitialized: true, path: folderPath };
+}
+
 export function generateBranchName(): string {
 	const name = uniqueNamesGenerator({
 		dictionaries: [adjectives, animals],
@@ -148,6 +174,14 @@ export async function createWorktree(
 			}
 		}
 
+		// For remote branches (origin/...), append ^{commit} to force Git to treat
+		// the startPoint as a commit, preventing implicit upstream tracking.
+		// For local branches, use them directly without the suffix.
+		const isRemoteBranch = startPoint.includes("origin/");
+		const resolvedStartPoint = isRemoteBranch
+			? `${startPoint}^{commit}`
+			: startPoint;
+
 		await execFileAsync(
 			"git",
 			[
@@ -158,10 +192,7 @@ export async function createWorktree(
 				worktreePath,
 				"-b",
 				branch,
-				// Append ^{commit} to force Git to treat the startPoint as a commit,
-				// not a branch ref. This prevents implicit upstream tracking when
-				// creating a new branch from a remote branch like origin/main.
-				`${startPoint}^{commit}`,
+				resolvedStartPoint,
 			],
 			{ env, timeout: 120_000 },
 		);
@@ -199,6 +230,28 @@ export async function createWorktree(
 			throw new Error(
 				`Failed to create worktree: This repository uses Git LFS, but git-lfs was not found or failed. ` +
 					`Please install git-lfs (e.g., 'brew install git-lfs') and run 'git lfs install'.`,
+			);
+		}
+
+		// Check for invalid reference errors (common with local-only repos)
+		const isInvalidRefError =
+			lowerError.includes("invalid reference") ||
+			lowerError.includes("not a valid object name") ||
+			lowerError.includes("unknown revision");
+
+		if (isInvalidRefError) {
+			const isRemoteRef = startPoint.includes("origin/");
+			console.error(`Invalid git reference during worktree creation: ${errorMessage}`);
+			if (isRemoteRef) {
+				throw new Error(
+					`Failed to create worktree: The branch "${startPoint}" does not exist. ` +
+						`This repository may be local-only (no remote configured) or the remote branch hasn't been fetched. ` +
+						`Try using a local branch name instead, or run 'git fetch origin' first.`,
+				);
+			}
+			throw new Error(
+				`Failed to create worktree: The branch "${startPoint}" does not exist. ` +
+					`Make sure you have at least one commit in the repository and the branch name is correct.`,
 			);
 		}
 
@@ -894,21 +947,20 @@ export async function createWorktreeForChat(
 	selectedBaseBranch?: string,
 ): Promise<WorktreeResult> {
 	try {
-		const git = simpleGit(projectPath);
-		const isRepo = await git.checkIsRepo();
+		// Ensure folder is a git repo (auto-init if needed)
+		await ensureGitRepo(projectPath);
 
-		if (!isRepo) {
-			return { success: true, worktreePath: projectPath };
-		}
-
-		// Use provided base branch or auto-detect
+		const hasRemote = await hasOriginRemote(projectPath);
 		const baseBranch = selectedBaseBranch || await getDefaultBranch(projectPath);
 
 		const branch = generateBranchName();
 		const worktreesDir = join(process.env.HOME || "", ".21st", "worktrees");
 		const worktreePath = join(worktreesDir, projectId, chatId);
 
-		await createWorktree(projectPath, branch, worktreePath, `origin/${baseBranch}`);
+		// Use local branch or origin branch based on remote availability
+		const startPoint = hasRemote ? `origin/${baseBranch}` : baseBranch;
+
+		await createWorktree(projectPath, branch, worktreePath, startPoint);
 
 		return { success: true, worktreePath, branch, baseBranch };
 	} catch (error) {

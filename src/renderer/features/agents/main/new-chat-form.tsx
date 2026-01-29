@@ -19,6 +19,7 @@ import {
   CheckIcon,
   ClaudeCodeIcon,
   CursorIcon,
+  GitHubLogo,
   IconChevronDown,
   PlanIcon,
   SearchIcon,
@@ -69,6 +70,7 @@ import {
   type FileMentionOption,
 } from "../mentions"
 import { AgentImageItem } from "../ui/agent-image-item"
+import { AgentFileItem } from "../ui/agent-file-item"
 import { AgentsHeaderControls } from "../ui/agents-header-controls"
 // import { CreateBranchDialog } from "@/app/(alpha)/agents/{components}/create-branch-dialog"
 import {
@@ -105,6 +107,7 @@ import {
   cursorModels,
   ampModels,
   droidModels,
+  copilotModels,
 } from "../../../../shared/models"
 
 // Agent providers
@@ -114,6 +117,7 @@ const agents = [
   { id: "cursor", name: "Cursor", hasModels: true },
   { id: "amp", name: "AMP", hasModels: true },
   { id: "droid", name: "Droid", hasModels: true },
+  { id: "copilot", name: "GitHub Copilot", hasModels: true },
 ]
 
 interface NewChatFormProps {
@@ -203,6 +207,8 @@ export function NewChatForm({
         return ampModels
       case "droid":
         return droidModels
+      case "copilot":
+        return copilotModels
       default:
         return claudeModels
     }
@@ -250,12 +256,15 @@ export function NewChatForm({
   const editorRef = useRef<AgentsMentionsEditorHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Image upload hook
+  // File/image upload hook
   const {
     images,
+    files,
     handleAddAttachments,
     removeImage,
+    removeFile,
     clearImages,
+    clearFiles,
     isUploading,
   } = useAgentsFileUpload()
 
@@ -573,9 +582,10 @@ export function NewChatForm({
   const utils = trpc.useUtils()
   const createChatMutation = trpc.chats.create.useMutation({
     onSuccess: (data) => {
-      // Clear editor and images only on success
+      // Clear editor and attachments only on success
       editorRef.current?.clear()
       clearImages()
+      clearFiles()
       clearCurrentDraft()
       utils.chats.list.invalidate()
       setSelectedChatId(data.id)
@@ -640,6 +650,12 @@ export function NewChatForm({
         return <CodexIcon className={className} />
       case "cursor":
         return <CursorIcon className={className} />
+      case "amp":
+        return <AgentIcon className={className} />
+      case "droid":
+        return <AgentIcon className={className} />
+      case "copilot":
+        return <GitHubLogo className={className} />
       default:
         return null
     }
@@ -649,7 +665,7 @@ export function NewChatForm({
     // Get value from uncontrolled editor
     const message = editorRef.current?.getValue() || ""
 
-    if (!message.trim() || !selectedProject) {
+    if ((!message.trim() && images.length === 0 && files.length === 0) || !selectedProject) {
       return
     }
 
@@ -657,16 +673,27 @@ export function NewChatForm({
     type MessagePart =
       | { type: "text"; text: string }
       | {
-        type: "data-image"
-        data: {
-          url: string
-          mediaType?: string
-          filename?: string
-          base64Data?: string
+          type: "data-image"
+          data: {
+            url: string
+            mediaType?: string
+            filename?: string
+            base64Data?: string
+          }
         }
-      }
+      | {
+          type: "data-file"
+          data: {
+            url: string
+            mediaType?: string
+            filename?: string
+            size?: number
+            path?: string
+          }
+        }
 
-    const parts: MessagePart[] = images
+    const parts: MessagePart[] = [
+      ...images
       .filter((img) => !img.isLoading && img.url)
       .map((img) => ({
         type: "data-image" as const,
@@ -677,6 +704,20 @@ export function NewChatForm({
           base64Data: img.base64Data,
         },
       }))
+      ,
+      ...files
+        .filter((file) => !file.isLoading && file.url)
+        .map((file) => ({
+          type: "data-file" as const,
+          data: {
+            url: file.url!,
+            mediaType: file.type,
+            filename: file.filename,
+            size: file.size,
+            path: file.path,
+          },
+        })),
+    ]
 
     if (message.trim()) {
       parts.push({ type: "text" as const, text: message.trim() })
@@ -691,10 +732,10 @@ export function NewChatForm({
         workMode === "worktree" ? selectedBranch || undefined : undefined,
       useWorktree: workMode === "worktree",
       mode: isPlanMode ? "plan" : "agent",
-      cli: selectedAgent.id as "claude-code" | "opencode" | "cursor" | "amp" | "droid",
+      cli: selectedAgent.id as "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot",
       model: selectedModel?.id,
     })
-    // Editor and images are cleared in onSuccess callback
+    // Editor and attachments are cleared in onSuccess callback
   }, [
     selectedProject,
     createChatMutation,
@@ -702,6 +743,7 @@ export function NewChatForm({
     selectedBranch,
     workMode,
     images,
+    files,
     isPlanMode,
     selectedAgent,
     selectedModel,
@@ -882,27 +924,38 @@ export function NewChatForm({
     setIsDragOver(false)
   }, [])
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setIsDragOver(false)
-      const files = Array.from(e.dataTransfer.files).filter((f) =>
-        f.type.startsWith("image/"),
-      )
-      handleAddAttachments(files)
-      // Focus after state update - use double rAF to wait for React render
-      requestAnimationFrame(() => {
+    const handleDrop = useCallback(
+      (e: React.DragEvent) => {
+        e.preventDefault()
+        setIsDragOver(false)
+        const files = new Map<string, File>()
+        Array.from(e.dataTransfer.files).forEach((file) =>
+          files.set(`${file.name}-${file.size}-${file.lastModified}`, file),
+        )
+        if (e.dataTransfer.items) {
+          Array.from(e.dataTransfer.items)
+            .filter((item) => item.kind === "file")
+            .forEach((item) => {
+              const file = item.getAsFile()
+              if (file) {
+                files.set(`${file.name}-${file.size}-${file.lastModified}`, file)
+              }
+            })
+        }
+        handleAddAttachments(Array.from(files.values()))
+        // Focus after state update - use double rAF to wait for React render
         requestAnimationFrame(() => {
-          editorRef.current?.focus()
+          requestAnimationFrame(() => {
+            editorRef.current?.focus()
+          })
         })
-      })
-    },
-    [handleAddAttachments],
-  )
+      },
+      [handleAddAttachments],
+    )
 
   // Context items for images
   const contextItems =
-    images.length > 0 ? (
+    images.length > 0 || files.length > 0 ? (
       <div className="flex flex-wrap gap-[6px]">
         {(() => {
           // Build allImages array for gallery navigation
@@ -927,6 +980,17 @@ export function NewChatForm({
             />
           ))
         })()}
+        {files.map((file) => (
+          <AgentFileItem
+            key={file.id}
+            id={file.id}
+            filename={file.filename}
+            url={file.url}
+            size={file.size}
+            isLoading={file.isLoading}
+            onRemove={() => removeFile(file.id)}
+          />
+        ))}
       </div>
     ) : null
 
@@ -1205,13 +1269,10 @@ export function NewChatForm({
                       {/* CLI/Agent selector */}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
+                          <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 min-w-0">
                             {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5")}
-                            <span>
+                            <span className="truncate max-w-[120px]">
                               {selectedAgent.name}
-                              {selectedAgent.hasModels && (
-                                <span className="text-muted-foreground"> {selectedModel?.name}</span>
-                              )}
                             </span>
                             <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                           </button>
@@ -1248,8 +1309,8 @@ export function NewChatForm({
                       {selectedAgent.hasModels && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                              <span>
+                            <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 min-w-0">
+                              <span className="truncate max-w-[110px]">
                                 {selectedModel?.name}
                                 {selectedAgent.id === "claude-code" && (
                                   <span className="text-muted-foreground"> 4.5</span>
@@ -1260,7 +1321,7 @@ export function NewChatForm({
                           </DropdownMenuTrigger>
                           <DropdownMenuContent
                             align="start"
-                            className="w-[150px]"
+                            className="w-[200px] max-h-[320px] overflow-y-auto"
                           >
                             {getModelsForAgent(selectedAgent.id).map((model) => {
                               const isSelected = selectedModel?.id === model.id
@@ -1306,7 +1367,7 @@ export function NewChatForm({
                         type="file"
                         ref={fileInputRef}
                         hidden
-                        accept="image/jpeg,image/png"
+                        accept="image/jpeg,image/png,.txt,.md,.markdown,.json,.yaml,.yml,.xml,.csv,.tsv,.log,.ini,.cfg,.conf,.js,.ts,.jsx,.tsx,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.html,.css,.scss,.sass,.less,.sql,.sh,.bash,.zsh,.ps1,.bat,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintrc,.babelrc,.nvmrc,.pdf,.canvas"
                         multiple
                         onChange={(e) => {
                           const files = Array.from(e.target.files || [])
@@ -1314,16 +1375,6 @@ export function NewChatForm({
                           e.target.value = "" // Reset to allow same file selection
                         }}
                       />
-                      {/* Attachment button */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 rounded-sm outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={images.length >= 5}
-                      >
-                        <AttachIcon className="h-4 w-4" />
-                      </Button>
                       <div className="ml-1">
                         <AgentSendButton
                           isStreaming={false}

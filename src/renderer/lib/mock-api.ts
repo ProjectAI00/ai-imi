@@ -239,6 +239,26 @@ export const api = {
         }
       },
     },
+    updateSubChatConfig: {
+      useMutation: (opts?: { onSuccess?: AnyFn; onError?: AnyFn }) => {
+        const mutation = trpc.chats.updateSubChatConfig.useMutation({
+          onSuccess: (data) => opts?.onSuccess?.(data),
+          onError: (err) => opts?.onError?.(err),
+        })
+        return {
+          mutate: (args?: {
+            subChatId: string
+            cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
+            model?: string
+          }) => {
+            if (args?.subChatId && args?.cli) {
+              mutation.mutate({ id: args.subChatId, cli: args.cli, model: args.model })
+            }
+          },
+          isPending: mutation.isPending,
+        }
+      },
+    },
     // Desktop stubs - not needed for local development
     createAgentPr: {
       useMutation: (opts?: { onSuccess?: AnyFn; onError?: AnyFn }) => ({

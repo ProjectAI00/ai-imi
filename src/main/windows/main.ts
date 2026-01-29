@@ -439,35 +439,15 @@ export function createMainWindow(): BrowserWindow {
     currentWindow = null
   })
 
-  // Load the renderer - check auth first
+  // Load the renderer - no auth gate, app is local-first
   const devServerUrl = process.env.ELECTRON_RENDERER_URL
-  const authManager = getAuthManager()
 
-  console.log("[Main] ========== AUTH CHECK ==========")
-  console.log("[Main] AuthManager exists:", !!authManager)
-  const isAuth = authManager.isAuthenticated()
-  console.log("[Main] isAuthenticated():", isAuth)
-  const user = authManager.getUser()
-  console.log("[Main] getUser():", user ? user.email : "null")
-  console.log("[Main] ================================")
-
-  if (isAuth) {
-    console.log("[Main] ✓ User authenticated, loading app")
-    if (devServerUrl) {
-      window.loadURL(devServerUrl)
-      window.webContents.openDevTools()
-    } else {
-      window.loadFile(join(__dirname, "../renderer/index.html"))
-    }
+  console.log("[Main] Loading app (no auth gate)")
+  if (devServerUrl) {
+    window.loadURL(devServerUrl)
+    window.webContents.openDevTools()
   } else {
-    console.log("[Main] ✗ Not authenticated, showing login page")
-    // In dev mode, login.html is in src/renderer
-    if (devServerUrl) {
-      const loginPath = join(app.getAppPath(), "src/renderer/login.html")
-      window.loadFile(loginPath)
-    } else {
-      window.loadFile(join(__dirname, "../renderer/login.html"))
-    }
+    window.loadFile(join(__dirname, "../renderer/index.html"))
   }
 
   // Ensure traffic lights are visible after page load (covers reload/Cmd+R case)

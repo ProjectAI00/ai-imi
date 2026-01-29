@@ -1,2 +1,6 @@
 export { openCodeAdapter } from "./opencode"
 export { cursorAdapter } from "./cursor"
+export { ampAdapter } from "./amp"
+export { droidAdapter } from "./droid"
+export { copilotAdapter } from "./copilot"
+export { codexAdapter } from "./codex"

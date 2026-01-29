@@ -377,3 +377,36 @@ export const anthropicOnboardingCompletedAtom = atomWithStorage<boolean>(
   undefined,
   { getOnInit: true },
 )
+
+// ============================================
+// NAVIGATION ATOMS
+// ============================================
+
+// Main navigation view mode
+// "chats" - default, shows chat list in sidebar
+// "tasks" - shows task list in sidebar
+export type NavViewMode = "chats" | "tasks"
+export const navViewModeAtom = atomWithStorage<NavViewMode>(
+  "nav:view-mode",
+  "chats",
+  undefined,
+  { getOnInit: true },
+)
+
+// Selected task ID (when viewing tasks)
+export const selectedTaskIdAtom = atom<string | null>(null)
+
+// Selected workspace (persisted)
+export type SelectedWorkspace = {
+  id: string
+  name: string
+  color?: string | null
+  icon?: string | null
+} | null
+
+export const selectedWorkspaceAtom = atomWithStorage<SelectedWorkspace>(
+  "workspace:selected",
+  null,
+  undefined,
+  { getOnInit: true },
+)

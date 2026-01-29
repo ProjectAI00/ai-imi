@@ -17,6 +17,21 @@ export interface UploadedFile {
   isLoading: boolean
   size?: number
   type?: string
+  path?: string // Actual file path from Electron (for CLI tools)
+}
+
+/**
+ * Get the actual file path using Electron's webUtils API
+ * Falls back to undefined if not available (web environment)
+ */
+function getFilePath(file: File): string | undefined {
+  try {
+    // @ts-expect-error - Electron's webUtils API exposed on window
+    const path = window.webUtils?.getPathForFile?.(file)
+    return path || undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -93,14 +108,23 @@ export function useAgentsFileUpload() {
       })
     )
 
-    const newFiles: UploadedFile[] = otherFiles.map((file) => ({
-      id: crypto.randomUUID(),
-      filename: file.name,
-      url: URL.createObjectURL(file),
-      isLoading: false,
-      size: file.size,
-      type: file.type,
-    }))
+    const newFiles: UploadedFile[] = otherFiles.map((file) => {
+      const filePath = getFilePath(file)
+      console.log("[useAgentsFileUpload] File path captured:", {
+        name: file.name,
+        path: filePath,
+        webUtilsAvailable: !!window.webUtils,
+      })
+      return {
+        id: crypto.randomUUID(),
+        filename: file.name,
+        url: URL.createObjectURL(file),
+        isLoading: false,
+        size: file.size,
+        type: file.type,
+        path: filePath, // Get actual file path for CLI tools
+      }
+    })
 
     setImages((prev) => [...prev, ...newImages])
     setFiles((prev) => [...prev, ...newFiles])

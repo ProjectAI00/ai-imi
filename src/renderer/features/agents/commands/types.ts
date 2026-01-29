@@ -15,6 +15,8 @@ export interface SlashCommand {
   path?: string
   // For repository commands - the repository name
   repository?: string
+  // For goal/task commands - requires a picker
+  requiresPicker?: "goal" | "task"
 }
 
 export interface SlashCommandOption extends SlashCommand {
@@ -33,11 +35,11 @@ export type BuiltinCommandAction =
   | { type: "clear" }
   | { type: "plan" }
   | { type: "agent" }
-  // Prompt-based commands (send to agent)
-  | { type: "review" }
-  | { type: "pr-comments" }
-  | { type: "release-notes" }
-  | { type: "security-review" }
+  // Goal/task commands (require picker, then send context)
+  | { type: "goal"; goalId?: string }
+  | { type: "task"; taskId?: string }
+  | { type: "goals" }  // List all goals
+  | { type: "tasks" }  // List tasks for current goal
 
 // Result of selecting a slash command
 export type SlashCommandSelection =

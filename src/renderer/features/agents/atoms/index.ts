@@ -125,6 +125,32 @@ export const clearLoading = (
   })
 }
 
+// Streaming activity text per sub-chat (for spinner label)
+export const streamingActivityAtom = atom<Map<string, string>>(new Map())
+
+// Write-only atom to set/clear activity
+export const setStreamingActivityAtom = atom(
+  null,
+  (
+    get,
+    set,
+    payload: { subChatId: string; text: string | null },
+  ) => {
+    const next = new Map(get(streamingActivityAtom))
+    if (!payload.text) {
+      next.delete(payload.subChatId)
+    } else {
+      next.set(payload.subChatId, payload.text)
+    }
+    set(streamingActivityAtom, next)
+  },
+)
+
+// Read-only atom family for per-subchat activity text
+export const streamingActivityAtomFamily = atomFamily((subChatId: string) =>
+  atom((get) => get(streamingActivityAtom).get(subChatId) || ""),
+)
+
 // Persisted preferences for agents page
 export type SavedRepo = {
   id: string

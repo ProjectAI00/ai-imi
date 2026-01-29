@@ -22,6 +22,7 @@ import {
   CollapseIcon,
   CopyIcon,
   CursorIcon,
+  GitHubLogo,
   ExpandIcon,
   IconCloseSidebarRight,
   IconOpenSidebarRight,
@@ -56,6 +57,7 @@ import {
   GitCommitHorizontal,
   GitMerge,
   ListTree,
+  MessageCircle,
   MoreHorizontal,
   Rows2,
   TerminalSquare,
@@ -72,7 +74,7 @@ import { api } from "../../../lib/mock-api"
 import { trpc, trpcClient } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
 import { getShortcutKey, isDesktopApp } from "../../../lib/utils/platform"
-import { terminalSidebarOpenAtom } from "../../terminal/atoms"
+import { terminalSidebarOpenAtom, rightPanelModeAtom } from "../../terminal/atoms"
 import { TerminalSidebar } from "../../terminal/terminal-sidebar"
 import {
   agentsDiffSidebarWidthAtom,
@@ -86,6 +88,7 @@ import {
   diffSidebarOpenAtomFamily,
   isPlanModeAtom,
   justCreatedIdsAtom,
+  lastSelectedAgentIdAtom,
   lastSelectedModelIdAtom,
   lastSelectedModelPerAgentAtom,
   loadingSubChatsAtom,
@@ -231,15 +234,15 @@ function getFirstSubChatId(
 // Layout constants for chat header and sticky messages
 const CHAT_LAYOUT = {
   // Padding top for chat content
-  paddingTopSidebarOpen: "pt-12", // When sidebar open (absolute header overlay)
+  paddingTopSidebarOpen: "pt-16", // When sidebar open (absolute header overlay)
   paddingTopSidebarClosed: "pt-4", // When sidebar closed (regular header)
   paddingTopMobile: "pt-14", // Mobile has header
   // Sticky message top position (title is now in flex above scroll, so top-0)
-  stickyTopSidebarOpen: "top-0", // When sidebar open (desktop, absolute header)
+  stickyTopSidebarOpen: "top-12", // When sidebar open (desktop, absolute header)
   stickyTopSidebarClosed: "top-0", // When sidebar closed (desktop, flex header)
   stickyTopMobile: "top-0", // Mobile (flex header, so top-0)
   // Header padding when absolute
-  headerPaddingSidebarOpen: "pt-1.5 pb-12 px-3 pl-2",
+  headerPaddingSidebarOpen: "pt-1.5 pb-10 px-3 pl-10",
   headerPaddingSidebarClosed: "p-2 pt-1.5",
 } as const
 
@@ -257,6 +260,7 @@ import {
   cursorModels,
   ampModels,
   droidModels,
+  copilotModels,
 } from "../../../../shared/models"
 
 // Agent providers
@@ -266,6 +270,7 @@ const agents = [
   { id: "cursor", name: "Cursor", hasModels: true },
   { id: "amp", name: "AMP", hasModels: true },
   { id: "droid", name: "Droid", hasModels: true },
+  { id: "copilot", name: "GitHub Copilot", hasModels: true },
 ]
 
 // Helper function to get agent icon
@@ -280,9 +285,11 @@ const getAgentIcon = (agentId: string, className?: string) => {
     case "codex":
       return <CodexIcon className={className} />
     case "amp":
-      return <span className={className}>⚡</span>
+      return <AgentIcon className={className} />
     case "droid":
-      return <span className={className}>🤖</span>
+      return <AgentIcon className={className} />
+    case "copilot":
+      return <GitHubLogo className={className} />
     default:
       return null
   }
@@ -961,6 +968,9 @@ function ChatViewInner({
   const [lastSelectedModelPerAgent, setLastSelectedModelPerAgent] = useAtom(
     lastSelectedModelPerAgentAtom,
   )
+  const [lastSelectedAgentId, setLastSelectedAgentId] = useAtom(
+    lastSelectedAgentIdAtom,
+  )
 
   // Get available models for selected agent
   const getModelsForAgent = (agentId: string) => {
@@ -975,6 +985,8 @@ function ChatViewInner({
         return ampModels
       case "droid":
         return droidModels
+      case "copilot":
+        return copilotModels
       default:
         return claudeModels
     }
@@ -987,32 +999,50 @@ function ChatViewInner({
     return models.find((m) => m.id === savedModelId) || models[1] || models[0]
   }
 
-  // Get current subchat's CLI to determine agent
-  // Get subchat from store (which has CLI info from DB)
-  const currentSubChatMeta = useAgentSubChatStore.getState().allSubChats.find((sc) => sc.id === subChatId)
-  // Also check DB subchats if available (from parent component)
-  // For now, default to claude-code and let the model selection work
-  const currentCli = "claude-code" // Default, will be updated when we have subchat data
-  const currentAgent = agents.find((a) => a.id === currentCli) || agents[0]
-
-  const [selectedAgent, setSelectedAgent] = useState(() => currentAgent)
-  const [selectedModel, setSelectedModel] = useState(
-    () => getDefaultModelForAgent(currentCli),
+  // Get current subchat's CLI/model to determine agent selection
+  const [selectedAgent, setSelectedAgent] = useState(() => agents[0])
+  const [selectedModel, setSelectedModel] = useState(() =>
+    getDefaultModelForAgent(agents[0].id),
   )
 
+  const updateSubChatConfigMutation = api.agents.updateSubChatConfig.useMutation({
+    onError: (error, variables) => {
+      const subChat = useAgentSubChatStore
+        .getState()
+        .allSubChats.find((sc) => sc.id === variables.subChatId)
+      if (subChat) {
+        useAgentSubChatStore.getState().updateSubChatCli(
+          variables.subChatId,
+          subChat.cli || "claude-code",
+        )
+        useAgentSubChatStore
+          .getState()
+          .updateSubChatModel(variables.subChatId, subChat.model)
+        setSelectedAgent(agents.find((a) => a.id === (subChat.cli || "claude-code")) || agents[0])
+        const fallbackModel =
+          (subChat.model &&
+            getModelsForAgent(subChat.cli || "claude-code").find((m) => m.id === subChat.model)) ||
+          getDefaultModelForAgent(subChat.cli || "claude-code")
+        setSelectedModel(fallbackModel)
+      }
+      console.error("Failed to update sub-chat config:", error.message)
+    },
+  })
+
   // Update selected agent and model when subchat changes
-  // Note: We'll get the actual CLI from the subchat when it's available
-  // For now, this will update when subChatId changes
   useEffect(() => {
-    // Try to get CLI from store or default to claude-code
-    const subChatMeta = useAgentSubChatStore.getState().allSubChats.find((sc) => sc.id === subChatId)
-    // The CLI is stored in the DB subchat, but we don't have direct access here
-    // So we'll default to claude-code for now - the model selection will still work
-    const cli = "claude-code"
+    const subChatMeta = useAgentSubChatStore
+      .getState()
+      .allSubChats.find((sc) => sc.id === subChatId)
+    const cli = subChatMeta?.cli || "claude-code"
     const newAgent = agents.find((a) => a.id === cli) || agents[0]
     setSelectedAgent(newAgent)
-    const newModel = getDefaultModelForAgent(cli)
-    setSelectedModel(newModel)
+    const modelId = subChatMeta?.model
+    const models = getModelsForAgent(newAgent.id)
+    const resolvedModel =
+      (modelId && models.find((m) => m.id === modelId)) ||
+      getDefaultModelForAgent(newAgent.id)
+    setSelectedModel(resolvedModel)
   }, [subChatId])
 
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
@@ -1700,15 +1730,16 @@ function ChatViewInner({
         })),
       ...files
         .filter((f) => !f.isLoading && f.url)
-        .map((f) => ({
-          type: "data-file" as const,
-          data: {
-            url: f.url,
-            mediaType: f.mediaType,
-            filename: f.filename,
-            size: f.size,
-          },
-        })),
+          .map((f) => ({
+            type: "data-file" as const,
+            data: {
+              url: f.url,
+              mediaType: f.type,
+              filename: f.filename,
+              size: f.size,
+              path: f.path,
+            },
+          })),
     ]
 
     if (text) {
@@ -1793,10 +1824,8 @@ function ChatViewInner({
             }
             break
           // Prompt-based commands - auto-send to agent
-          case "review":
-          case "pr-comments":
-          case "release-notes":
-          case "security-review": {
+          case "goals":
+          case "tasks": {
             const prompt =
               COMMAND_PROMPTS[command.name as keyof typeof COMMAND_PROMPTS]
             if (prompt) {
@@ -1804,6 +1833,14 @@ function ChatViewInner({
               // Auto-send the prompt to agent
               setTimeout(() => handleSend(), 0)
             }
+            break
+          }
+          // Goal/task picker commands - TODO: show picker UI
+          case "goal":
+          case "task": {
+            // For now, show a toast that this feature is coming
+            // TODO: implement goal/task picker dropdown
+            console.log(`[Command] ${command.name} picker not yet implemented`)
             break
           }
         }
@@ -1857,8 +1894,21 @@ function ChatViewInner({
     (e: React.DragEvent) => {
       e.preventDefault()
       setIsDragOver(false)
-      const droppedFiles = Array.from(e.dataTransfer.files)
-      handleAddAttachments(droppedFiles)
+      const files = new Map<string, File>()
+      Array.from(e.dataTransfer.files).forEach((file) =>
+        files.set(`${file.name}-${file.size}-${file.lastModified}`, file),
+      )
+      if (e.dataTransfer.items) {
+        Array.from(e.dataTransfer.items)
+          .filter((item) => item.kind === "file")
+          .forEach((item) => {
+            const file = item.getAsFile()
+            if (file) {
+              files.set(`${file.name}-${file.size}-${file.lastModified}`, file)
+            }
+          })
+      }
+      handleAddAttachments(Array.from(files.values()))
       // Focus after state update - use double rAF to wait for React render
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -1949,24 +1999,7 @@ function ChatViewInner({
 
   return (
     <>
-      {/* Chat title - flex above scroll area (desktop only) */}
-      {!isMobile && (
-        <div
-          className={cn(
-            "flex-shrink-0 pb-2",
-            isSubChatsSidebarOpen ? "pt-[52px]" : "pt-2",
-          )}
-        >
-          <ChatTitleEditor
-            name={subChatName}
-            placeholder="New Agent"
-            onSave={handleRenameSubChat}
-            isMobile={false}
-            chatId={subChatId}
-            hasMessages={messages.length > 0}
-          />
-        </div>
-      )}
+      {/* Chat title removed - shown in header already */}
 
       {/* Messages */}
       <div
@@ -1977,7 +2010,16 @@ function ChatViewInner({
         tabIndex={-1}
         data-chat-container
       >
-        <div className="px-2 max-w-2xl mx-auto -mb-4 pb-8 space-y-4">
+        <div
+          className={cn(
+            "px-2 max-w-2xl mx-auto -mb-4 pb-8 space-y-4",
+            isMobile
+              ? CHAT_LAYOUT.paddingTopMobile
+              : isSubChatsSidebarOpen
+                ? CHAT_LAYOUT.paddingTopSidebarOpen
+                : CHAT_LAYOUT.paddingTopSidebarClosed,
+          )}
+        >
           <div>
             {/* Render message groups - each group has user message sticky within it */}
             {messageGroups.map((group, groupIndex) => {
@@ -1992,6 +2034,8 @@ function ChatViewInner({
 
               const imageParts =
                 msg.parts?.filter((p: any) => p.type === "data-image") || []
+              const fileParts =
+                msg.parts?.filter((p: any) => p.type === "data-file") || []
 
               // Show cloning when sandbox is being set up (only for last user message with no responses)
               const shouldShowCloning =
@@ -2008,18 +2052,33 @@ function ChatViewInner({
               return (
                 <div key={msg.id} className="relative">
                   {/* Attachments - NOT sticky, scroll normally */}
-                  {imageParts.length > 0 && (
+                  {(imageParts.length > 0 || fileParts.length > 0) && (
                     <motion.div
                       className="mb-2 pointer-events-auto"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ duration: 0.1, ease: "easeOut" }}
                     >
-                      <AgentUserMessageBubble
-                        messageId={msg.id}
-                        textContent=""
-                        imageParts={imageParts}
-                      />
+                      {imageParts.length > 0 && (
+                        <AgentUserMessageBubble
+                          messageId={msg.id}
+                          textContent=""
+                          imageParts={imageParts}
+                        />
+                      )}
+                      {fileParts.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {fileParts.map((part: any, idx: number) => (
+                            <AgentFileItem
+                              key={`${msg.id}-file-${idx}`}
+                              id={`${msg.id}-file-${idx}`}
+                              filename={part.data?.filename || "attachment"}
+                              url={part.data?.url || ""}
+                              size={part.data?.size}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </motion.div>
                   )}
                   {/* User message text - sticky WITHIN this group */}
@@ -2636,6 +2695,7 @@ function ChatViewInner({
             <div className="w-full max-w-2xl mx-auto px-2">
               <SubChatStatusCard
                 chatId={parentChatId}
+                subChatId={subChatId}
                 isStreaming={isStreaming}
                 changedFiles={changedFilesForSubChat}
                 worktreePath={projectPath}
@@ -2924,6 +2984,60 @@ function ChatViewInner({
                         )}
                     </DropdownMenu>
 
+                    {/* Agent selector - CLI host */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 min-w-0">
+                          {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5")}
+                          <span className="truncate max-w-[120px]">
+                            {selectedAgent.name}
+                          </span>
+                          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="w-[180px]"
+                      >
+                        {agents.map((agent) => {
+                          const isSelected = selectedAgent.id === agent.id
+                          return (
+                            <DropdownMenuItem
+                              key={agent.id}
+                              onClick={() => {
+                                setSelectedAgent(agent)
+                                setLastSelectedAgentId(agent.id)
+                                // Update model to default for new agent
+                                const newDefaultModel = getDefaultModelForAgent(agent.id)
+                                setSelectedModel(newDefaultModel)
+                                // Persist to sub-chat store and database
+                                if (subChatId) {
+                                  useAgentSubChatStore.getState().updateSubChatCli(subChatId, agent.id)
+                                  useAgentSubChatStore.getState().updateSubChatModel(subChatId, newDefaultModel.id)
+                                  if (!subChatId.startsWith("temp-")) {
+                                    updateSubChatConfigMutation.mutate({
+                                      subChatId,
+                                      cli: agent.id,
+                                      model: newDefaultModel.id,
+                                    })
+                                  }
+                                }
+                              }}
+                              className="gap-2 justify-between"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                {getAgentIcon(agent.id, "h-3.5 w-3.5 text-muted-foreground shrink-0")}
+                                <span>{agent.name}</span>
+                              </div>
+                              {isSelected && (
+                                <CheckIcon className="h-3.5 w-3.5 shrink-0" />
+                              )}
+                            </DropdownMenuItem>
+                          )
+                        })}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
                     {/* Model selector - only show for agents with models */}
                     {selectedAgent.hasModels && (
                       <DropdownMenu
@@ -2931,9 +3045,8 @@ function ChatViewInner({
                         onOpenChange={setIsModelDropdownOpen}
                       >
                         <DropdownMenuTrigger asChild>
-                          <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                            {getAgentIcon(selectedAgent.id, "h-3.5 w-3.5")}
-                            <span>
+                          <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 min-w-0">
+                            <span className="truncate max-w-[110px]">
                               {selectedModel?.name}
                               {selectedAgent.id === "claude-code" && (
                                 <span className="text-muted-foreground"> 4.5</span>
@@ -2942,7 +3055,10 @@ function ChatViewInner({
                             <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                           </button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="w-[150px]">
+                        <DropdownMenuContent
+                          align="start"
+                          className="w-[200px] max-h-[320px] overflow-y-auto"
+                        >
                           {getModelsForAgent(selectedAgent.id).map((model) => {
                             const isSelected = selectedModel?.id === model.id
                             return (
@@ -2957,6 +3073,17 @@ function ChatViewInner({
                                   // Also update legacy atom for backward compatibility
                                   if (selectedAgent.id === "claude-code") {
                                     setLastSelectedModelId(model.id)
+                                  }
+                                  // Persist to sub-chat store and database
+                                  if (subChatId) {
+                                    useAgentSubChatStore.getState().updateSubChatModel(subChatId, model.id)
+                                    if (!subChatId.startsWith("temp-")) {
+                                      updateSubChatConfigMutation.mutate({
+                                        subChatId,
+                                        cli: selectedAgent.id,
+                                        model: model.id,
+                                      })
+                                    }
                                   }
                                 }}
                                 className="gap-2 justify-between"
@@ -2983,18 +3110,18 @@ function ChatViewInner({
 
                   <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
                     {/* Hidden file input - accepts images and text/code files */}
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      hidden
-                      accept="image/jpeg,image/png,.txt,.md,.markdown,.json,.yaml,.yml,.xml,.csv,.tsv,.log,.ini,.cfg,.conf,.js,.ts,.jsx,.tsx,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.html,.css,.scss,.sass,.less,.sql,.sh,.bash,.zsh,.ps1,.bat,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintrc,.babelrc,.nvmrc,.pdf"
-                      multiple
-                      onChange={(e) => {
-                        const inputFiles = Array.from(e.target.files || [])
-                        handleAddAttachments(inputFiles)
-                        e.target.value = ""
-                      }}
-                    />
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        hidden
+                        accept="image/jpeg,image/png,.txt,.md,.markdown,.json,.yaml,.yml,.xml,.csv,.tsv,.log,.ini,.cfg,.conf,.js,.ts,.jsx,.tsx,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.cpp,.h,.hpp,.cs,.php,.html,.css,.scss,.sass,.less,.sql,.sh,.bash,.zsh,.ps1,.bat,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintrc,.babelrc,.nvmrc,.pdf,.canvas"
+                        multiple
+                        onChange={(e) => {
+                          const inputFiles = Array.from(e.target.files || [])
+                          handleAddAttachments(inputFiles)
+                          e.target.value = ""
+                        }}
+                      />
 
                     {/* Context window indicator */}
                     <AgentContextIndicator messages={messages} />
@@ -3108,6 +3235,8 @@ export function ChatView({
   onOpenPreview,
   onOpenDiff,
   onOpenTerminal,
+  onOpenChatPanel,
+  onToggleSubChatsSidebar,
 }: {
   chatId: string
   isSidebarOpen: boolean
@@ -3119,6 +3248,8 @@ export function ChatView({
   onOpenPreview?: () => void
   onOpenDiff?: () => void
   onOpenTerminal?: () => void
+  onOpenChatPanel?: () => void
+  onToggleSubChatsSidebar?: () => void
 }) {
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [selectedModelId] = useAtom(lastSelectedModelIdAtom)
@@ -3146,6 +3277,7 @@ export function ChatView({
   const [isTerminalSidebarOpen, setIsTerminalSidebarOpen] = useAtom(
     terminalSidebarOpenAtom,
   )
+  const [rightPanelMode, setRightPanelMode] = useAtom(rightPanelModeAtom)
   const [diffStats, setDiffStats] = useState({
     fileCount: 0,
     additions: 0,
@@ -3164,7 +3296,9 @@ export function ChatView({
     Record<string, string>
   >({})
   const [diffMode, setDiffMode] = useAtom(diffViewModeAtom)
-  const subChatsSidebarMode = useAtomValue(agentsSubChatsSidebarModeAtom)
+  const [subChatsSidebarMode, setSubChatsSidebarMode] = useAtom(
+    agentsSubChatsSidebarModeAtom,
+  )
 
   // Track diff sidebar width for responsive header
   const storedDiffSidebarWidth = useAtomValue(agentsDiffSidebarWidthAtom)
@@ -3277,7 +3411,7 @@ export function ChatView({
     id: string
     name?: string | null
     mode?: "plan" | "agent" | null
-    cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | null
+    cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot" | null
     created_at?: Date | string | null
     updated_at?: Date | string | null
     messages?: any
@@ -3711,6 +3845,18 @@ export function ChatView({
           (sc.mode as "plan" | "agent" | undefined) ||
           existingLocal?.mode ||
           "agent",
+        cli:
+          (sc.cli as
+            | "claude-code"
+            | "opencode"
+            | "cursor"
+            | "amp"
+            | "droid"
+            | "copilot"
+            | undefined) ||
+          existingLocal?.cli ||
+          "claude-code",
+        model: (sc.model as string | undefined) || existingLocal?.model,
       }
     })
     const dbSubChatIds = new Set(dbSubChats.map((sc) => sc.id))
@@ -3772,7 +3918,8 @@ export function ChatView({
         .getState()
         .allSubChats.find((sc) => sc.id === subChatId)
       const subChatMode = subChatMeta?.mode || (isPlanMode ? "plan" : "agent")
-      const subChatCli = (subChat?.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid") || "claude-code"
+      // Read CLI from store (updated by dropdown) with fallback to DB value
+      const subChatCli = (subChatMeta?.cli || subChat?.cli || "claude-code") as "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
 
       // Desktop: use IPCChatTransport for local Claude Code execution
       // Note: Extended thinking setting is read dynamically inside the transport
@@ -3783,6 +3930,8 @@ export function ChatView({
           cwd: worktreePath,
           mode: subChatMode,
           cli: subChatCli,
+          goalId: subChat?.goalId || undefined,
+          taskId: subChat?.taskId || undefined,
         })
         : null // Web transport not supported in desktop app
 
@@ -3879,7 +4028,8 @@ export function ChatView({
 
     // Inherit CLI from active sub-chat, or default to claude-code
     const activeSubChat = agentSubChats.find((sc) => sc.id === store.activeSubChatId)
-    const inheritedCli = (activeSubChat?.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid") || "claude-code"
+    const inheritedCli = (activeSubChat?.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot") || "claude-code"
+    const inheritedModel = activeSubChat?.model || selectedModel?.id
 
     // Create sub-chat in DB first to get the real ID
     const newSubChat = await trpcClient.chats.createSubChat.mutate({
@@ -3887,6 +4037,7 @@ export function ChatView({
       name: "New Agent",
       mode: subChatMode,
       cli: inheritedCli,
+      model: inheritedModel,
     })
     const newId = newSubChat.id
 
@@ -3899,6 +4050,8 @@ export function ChatView({
       name: "New Agent",
       created_at: new Date().toISOString(),
       mode: subChatMode,
+      cli: inheritedCli,
+      model: inheritedModel,
     })
 
     // Add to open tabs and set as active
@@ -3909,13 +4062,15 @@ export function ChatView({
     if (worktreePath) {
       // Desktop: use IPCChatTransport for local CLI execution
       // Note: Extended thinking setting is read dynamically inside the transport
-      const newSubChatCli = (newSubChat.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid") || "claude-code"
+      const newSubChatCli = (newSubChat.cli as "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot") || "claude-code"
       const transport = new IPCChatTransport({
         chatId,
         subChatId: newId,
         cwd: worktreePath,
         mode: subChatMode,
         cli: newSubChatCli,
+        goalId: newSubChat.goalId || undefined,
+        taskId: newSubChat.taskId || undefined,
       })
 
       const newChat = new Chat<any>({
@@ -4389,6 +4544,16 @@ export function ChatView({
           className="flex-1 flex flex-col overflow-hidden relative"
           style={{ minWidth: "350px" }}
         >
+          {!isMobileFullscreen && (
+            <div className="absolute left-2 top-1.5 z-50 pointer-events-auto">
+              <AgentsHeaderControls
+                isSidebarOpen={isSidebarOpen}
+                onToggleSidebar={onToggleSidebar}
+                hasUnseenChanges={hasAnyUnseenChanges}
+                isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+              />
+            </div>
+          )}
           {/* SubChatSelector header - absolute when sidebar open (desktop only), regular div otherwise */}
           {!shouldHideChatHeader && (
             <div
@@ -4400,10 +4565,7 @@ export function ChatView({
                   : `flex-shrink-0 ${CHAT_LAYOUT.headerPaddingSidebarClosed}`,
               )}
             >
-              {/* Gradient background - only when not absolute */}
-              {(isMobileFullscreen || subChatsSidebarMode !== "sidebar") && (
-                <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-transparent" />
-              )}
+              <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-transparent" />
               <div className="pointer-events-auto flex items-center justify-between relative">
                 <div className="flex-1 min-w-0 flex items-center gap-2">
                   {/* Mobile header - simplified with chat name as trigger */}
@@ -4418,30 +4580,27 @@ export function ChatView({
                       diffStats={diffStats}
                       onOpenTerminal={onOpenTerminal}
                       canOpenTerminal={!!worktreePath}
+                      onOpenChatPanel={onOpenChatPanel}
+                      canOpenChatPanel={true}
                       isArchived={isArchived}
                       onRestore={handleRestoreWorkspace}
                     />
                   ) : (
                     <>
-                      {/* Header controls - desktop only */}
-                      <AgentsHeaderControls
-                        isSidebarOpen={isSidebarOpen}
-                        onToggleSidebar={onToggleSidebar}
-                        hasUnseenChanges={hasAnyUnseenChanges}
-                        isSubChatsSidebarOpen={
-                          subChatsSidebarMode === "sidebar"
-                        }
-                      />
                       <SubChatSelector
                         onCreateNew={handleCreateNewSubChat}
                         isMobile={false}
-                        onBackToChats={onBackToChats}
+                        onBackToChats={
+                          onBackToChats
+                        }
                         onOpenPreview={onOpenPreview}
                         canOpenPreview={canOpenPreview}
                         onOpenDiff={() => setIsDiffSidebarOpen(true)}
                         canOpenDiff={canOpenDiff}
                         isDiffSidebarOpen={isDiffSidebarOpen}
                         diffStats={diffStats}
+                        maxNameWidthClass="max-w-[120px]"
+                        maxModelWidthClass="max-w-[100px]"
                       />
                     </>
                   )}
@@ -4480,28 +4639,64 @@ export function ChatView({
                       </span>
                     </PreviewSetupHoverCard>
                   ))}
+                {/* Chat Panel Button - shows when chat panel is closed (desktop only) */}
+                {!isMobileFullscreen && rightPanelMode !== "chat" && (
+                  <Tooltip delayDuration={500}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setRightPanelMode("chat")}
+                        className="h-6 w-6 p-0 hover:bg-foreground/10 transition-colors text-foreground flex-shrink-0 rounded-md ml-2"
+                        aria-label="Open chat panel"
+                      >
+                        <MessageCircle className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      Open chat panel
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 {/* Terminal Button - shows when terminal is closed and worktree exists (desktop only) */}
-                {!isMobileFullscreen &&
-                  !isTerminalSidebarOpen &&
-                  worktreePath && (
-                    <Tooltip delayDuration={500}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setIsTerminalSidebarOpen(true)}
-                          className="h-6 w-6 p-0 hover:bg-foreground/10 transition-colors text-foreground flex-shrink-0 rounded-md ml-2"
-                          aria-label="Open terminal"
-                        >
-                          <TerminalSquare className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        Open terminal
-                        <Kbd>⌘J</Kbd>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
+                {!isMobileFullscreen && rightPanelMode !== "terminal" && (
+                  <Tooltip delayDuration={500}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setRightPanelMode("terminal")}
+                        className="h-6 w-6 p-0 hover:bg-foreground/10 transition-colors text-foreground flex-shrink-0 rounded-md ml-2"
+                        aria-label="Open terminal"
+                        disabled={!worktreePath}
+                      >
+                        <TerminalSquare className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {worktreePath ? "Open terminal" : "Terminal unavailable"}
+                      <Kbd>⌘J</Kbd>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {!isMobileFullscreen && rightPanelMode !== "closed" && (
+                  <Tooltip delayDuration={500}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setRightPanelMode("closed")}
+                        className="h-6 w-6 p-0 hover:bg-foreground/10 transition-colors text-foreground flex-shrink-0 rounded-md ml-2"
+                        aria-label="Close right panel"
+                      >
+                        <IconCloseSidebarRight className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      Close right panel
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 {/* Restore Button - shows when viewing archived workspace (desktop only) */}
                 {!isMobileFullscreen && isArchived && (
                   <Tooltip delayDuration={500}>
@@ -5015,14 +5210,7 @@ export function ChatView({
           </ResizableSidebar>
         )}
 
-        {/* Terminal Sidebar - shows when worktree exists (desktop only) */}
-        {worktreePath && (
-          <TerminalSidebar
-            chatId={chatId}
-            cwd={worktreePath}
-            workspaceId={chatId}
-          />
-        )}
+
       </div>
     </div>
   )

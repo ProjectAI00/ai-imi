@@ -16,7 +16,8 @@ function stripAnsi(text: string): string {
   return text
     .replace(/\x1b\[[0-9;]*[A-Za-z]/g, "") // CSI sequences
     .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "") // OSC sequences
-    .replace(/[\u0000-\u001f\u007f]/g, "") // Control characters (except newline handled separately)
+    .replace(/\t/g, " ")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "") // Control chars except \t, \n, \r
 }
 
 /**
@@ -24,18 +25,32 @@ function stripAnsi(text: string): string {
  * Ported from ai-imi's sanitizeCliOutput
  */
 function sanitizeOutput(chunk: string): string {
-  const cleaned = stripAnsi(chunk).replace(/\r/g, "")
+  const cleaned = stripAnsi(chunk).replace(/\r/g, "\n")
   const lines = cleaned.split("\n")
   const filtered: string[] = []
   let lastWasEmpty = false
 
+  const stripUsageFooter = (line: string): string | null => {
+    const usageMatch = line.match(
+      /(Total usage est:|Usage by model:|Total duration \(API\):|Total duration \(wall\):|Premium requests|Total code changes:|\b\d+(?:\.\d+)?k?\s+input\b|\b\d+(?:\.\d+)?k?\s+output\b|\b\d+(?:\.\d+)?k?\s+cache read\b)/i
+    )
+    if (!usageMatch) return line
+    const trimmed = line.slice(0, usageMatch.index).trimEnd()
+    return trimmed ? trimmed : null
+  }
+
   for (const line of lines) {
     // Filter out CLI UI elements (progress bars, spinners, box drawing)
-    if (/[▣⬝■█▀━┃]/.test(line)) continue
+    const hasSpinner = /[▣⬝■█▀━┃]/.test(line)
+    const lineWithoutSpinner = line.replace(/[▣⬝■█▀━┃]/g, " ")
+    const lineForEmpty = lineWithoutSpinner.trim()
+    if (!lineForEmpty) continue
     // Filter out keyboard shortcut hints
     if (/(esc interrupt|ctrl\+t|ctrl\+p)/i.test(line)) continue
 
-    const isEmpty = !line.trim()
+    const cleanedLine = stripUsageFooter(hasSpinner ? `• ${lineForEmpty}` : lineWithoutSpinner)
+    if (cleanedLine === null) continue
+    const isEmpty = !cleanedLine.trim()
     // Keep single empty lines for paragraph breaks, but collapse multiple
     if (isEmpty) {
       if (!lastWasEmpty && filtered.length > 0) {
@@ -43,12 +58,13 @@ function sanitizeOutput(chunk: string): string {
       }
       lastWasEmpty = true
     } else {
-      filtered.push(line)
+      filtered.push(cleanedLine)
       lastWasEmpty = false
     }
   }
 
-  return filtered.join("\n").trim()
+  // Don't trim - preserve leading/trailing newlines for proper chunk concatenation
+  return filtered.join("\n")
 }
 
 /**
@@ -107,10 +123,23 @@ export const droidAdapter: CliAdapter = {
     return observable<UIMessageChunk>((emit: { next: (chunk: UIMessageChunk) => void; complete: () => void; error: (err: Error) => void }) => {
       const model = resolveModel(input.model)
 
-      // Build prompt with context if provided (for conversation continuity)
-      const fullPrompt = input.contextHistory
-        ? `${input.contextHistory}\n\n---\n\nUser: ${input.prompt}`
-        : input.prompt
+      // Build prompt with root system prompt, context, and user message
+      const promptParts: string[] = []
+      
+      // 1. Root system prompt (consistent behavior layer)
+      if (input.rootSystemPrompt) {
+        promptParts.push(input.rootSystemPrompt)
+      }
+      
+      // 2. Conversation history (if any)
+      if (input.contextHistory) {
+        promptParts.push(input.contextHistory)
+      }
+      
+      // 3. Current user message
+      promptParts.push(`User: ${input.prompt}`)
+      
+      const fullPrompt = promptParts.join("\n\n---\n\n")
 
       // Build command arguments for Droid
       // Droid uses: droid exec -o stream-json --model <model> "<prompt>"

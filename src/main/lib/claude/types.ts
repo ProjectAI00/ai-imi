@@ -5,6 +5,8 @@ export type UIMessageChunk =
   | { type: "finish"; messageMetadata?: MessageMetadata }
   | { type: "start-step" }
   | { type: "finish-step" }
+  // Session management
+  | { type: "session-id"; sessionId: string }
   // Text streaming
   | { type: "text-start"; id: string }
   | { type: "text-delta"; id: string; delta: string }
@@ -25,7 +27,7 @@ export type UIMessageChunk =
   | { type: "tool-output-error"; toolCallId: string; errorText: string }
   // Error & metadata
   | { type: "error"; errorText: string }
-  | { type: "auth-error"; errorText: string; cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" }
+  | { type: "auth-error"; errorText: string; cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot" }
   | {
       type: "ask-user-question"
       toolUseId: string
@@ -43,6 +45,18 @@ export type UIMessageChunk =
       type: "system-Compact"
       toolCallId: string
       state: "input-streaming" | "output-available"
+    }
+  // Task creation (Plan Mode)
+  | {
+      type: "tasks-created"
+      tasks: Array<{ id: string; title: string }>
+    }
+  // Goal creation (Plan Mode - from plan builder blocks)
+  | {
+      type: "goal-created"
+      goalId: string
+      goalName: string
+      taskCount: number
     }
 
 export type MessageMetadata = {

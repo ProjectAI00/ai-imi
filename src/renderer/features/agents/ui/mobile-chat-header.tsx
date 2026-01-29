@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useState } from "react"
 import { useAtomValue } from "jotai"
 import { loadingSubChatsAtom } from "../atoms"
-import { Plus, ChevronDown, Play, AlignJustify } from "lucide-react"
+import { Plus, ChevronDown, Play, AlignJustify, MessageCircle } from "lucide-react"
 import {
   IconSpinner,
   PlanIcon,
@@ -40,6 +40,8 @@ interface MobileChatHeaderProps {
   diffStats?: DiffStats
   onOpenTerminal?: () => void
   canOpenTerminal?: boolean
+  onOpenChatPanel?: () => void
+  canOpenChatPanel?: boolean
   isArchived?: boolean
   onRestore?: () => void
 }
@@ -54,6 +56,8 @@ export function MobileChatHeader({
   diffStats,
   onOpenTerminal,
   canOpenTerminal = false,
+  onOpenChatPanel,
+  canOpenChatPanel = false,
   isArchived = false,
   onRestore,
 }: MobileChatHeaderProps) {
@@ -219,6 +223,18 @@ export function MobileChatHeader({
         >
           <Plus className="h-4 w-4" />
         </Button>
+
+        {/* Chat panel button */}
+        {onOpenChatPanel && canOpenChatPanel && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOpenChatPanel}
+            className="h-7 w-7 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md"
+          >
+            <MessageCircle className="h-4 w-4" />
+          </Button>
+        )}
 
         {/* Terminal button */}
         {onOpenTerminal && canOpenTerminal && (

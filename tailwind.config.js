@@ -44,6 +44,7 @@ module.exports = {
           DEFAULT: "hsl(var(--plan-mode))",
           foreground: "hsl(var(--plan-mode-foreground))",
         },
+        shell: "hsl(var(--shell))",
       },
       borderRadius: {
         lg: "var(--radius)",

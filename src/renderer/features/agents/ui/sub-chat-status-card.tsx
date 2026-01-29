@@ -1,7 +1,7 @@
 "use client"
 
 import { memo, useState, useMemo, useEffect } from "react"
-import { useSetAtom, useAtom } from "jotai"
+import { useSetAtom, useAtom, useAtomValue } from "jotai"
 import { ChevronUp } from "lucide-react"
 import { motion, AnimatePresence } from "motion/react"
 import { Button } from "../../../components/ui/button"
@@ -13,6 +13,7 @@ import {
   agentsFocusedDiffFileAtom,
   filteredDiffFilesAtom,
   type SubChatFileChange,
+  streamingActivityAtomFamily,
 } from "../atoms"
 
 // Animated dots component that cycles through ., .., ...
@@ -31,6 +32,7 @@ function AnimatedDots() {
 
 interface SubChatStatusCardProps {
   chatId: string // Parent chat ID for per-chat diff sidebar state
+  subChatId: string
   isStreaming: boolean
   changedFiles: SubChatFileChange[]
   worktreePath?: string | null // For git status check to hide committed files
@@ -39,6 +41,7 @@ interface SubChatStatusCardProps {
 
 export const SubChatStatusCard = memo(function SubChatStatusCard({
   chatId,
+  subChatId,
   isStreaming,
   changedFiles,
   worktreePath,
@@ -53,6 +56,9 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
   const [, setDiffSidebarOpen] = useAtom(diffSidebarAtom)
   const setFilteredDiffFiles = useSetAtom(filteredDiffFilesAtom)
   const setFocusedDiffFile = useSetAtom(agentsFocusedDiffFileAtom)
+  const streamingActivity = useAtomValue(
+    useMemo(() => streamingActivityAtomFamily(subChatId), [subChatId]),
+  )
 
   // Fetch git status to filter out committed files
   const { data: gitStatus } = trpc.changes.getStatus.useQuery(
@@ -212,7 +218,8 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
           {/* Streaming indicator */}
           {isStreaming && uncommittedFiles.length === 0 && (
             <span className="text-xs text-muted-foreground">
-              Generating<AnimatedDots />
+              {streamingActivity || "Generating"}
+              <AnimatedDots />
             </span>
           )}
 

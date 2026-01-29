@@ -58,6 +58,11 @@ function detectChanges(
   oldTodos: TodoItem[],
   newTodos: TodoItem[],
 ): DetectedChanges {
+  // Safety guard - ensure arrays
+  if (!Array.isArray(newTodos) || newTodos.length === 0) {
+    return { type: "creation", items: [] }
+  }
+  
   // If no old todos, this is a creation - show full list ONCE
   if (!oldTodos || oldTodos.length === 0) {
     return {
@@ -176,8 +181,12 @@ export const AgentTodoTool = memo(function AgentTodoTool({
   const [syncedTodos, setSyncedTodos] = useAtom(todosAtom)
 
   // Get todos from input or output.newTodos
-  const oldTodos = part.output?.oldTodos || []
-  const newTodos = part.input?.todos || part.output?.newTodos || []
+  const oldTodos = Array.isArray(part.output?.oldTodos) ? part.output.oldTodos : []
+  const newTodos = Array.isArray(part.input?.todos) 
+    ? part.input.todos 
+    : Array.isArray(part.output?.newTodos) 
+      ? part.output.newTodos 
+      : []
 
   // Detect what changed - memoize to avoid recalculation
   const changes = useMemo(

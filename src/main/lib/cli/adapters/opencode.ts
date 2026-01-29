@@ -1,54 +1,32 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
+import { spawn } from "child_process"
 import { observable } from "@trpc/server/observable"
 import type { CliAdapter, ChatInput, UIMessageChunk } from "../types"
 
-// Active processes for cancellation
-const activeProcesses = new Map<string, ChildProcessWithoutNullStreams>()
+// Lazy-loaded OpenCode SDK types and client
+let createOpencodeFunc: typeof import("@opencode-ai/sdk").createOpencode | null = null
+let opencodeInstance: Awaited<ReturnType<typeof import("@opencode-ai/sdk").createOpencode>> | null = null
+
+// Active sessions for cancellation (SDK-based)
+const activeSessions = new Map<string, { sessionId: string; abort: () => Promise<void> }>()
 
 /**
- * Strip ANSI escape codes from string
- * Handles:
- * - CSI sequences (colors, cursor movement, etc.)
- * - OSC sequences (window titles, hyperlinks)
- * - Control characters
+ * Get or create the singleton OpenCode client
  */
-function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, "") // CSI sequences
-    .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "") // OSC sequences
-    .replace(/[\u0000-\u001f\u007f]/g, "") // Control characters (except newline handled separately)
-}
-
-/**
- * Clean CLI output - remove UI artifacts and spinner characters
- * Ported from ai-imi's sanitizeCliOutput
- */
-function sanitizeOutput(chunk: string): string {
-  const cleaned = stripAnsi(chunk).replace(/\r/g, "")
-  const lines = cleaned.split("\n")
-  const filtered: string[] = []
-  let lastWasEmpty = false
-
-  for (const line of lines) {
-    // Filter out CLI UI elements (progress bars, spinners, box drawing)
-    if (/[▣⬝■█▀━┃]/.test(line)) continue
-    // Filter out keyboard shortcut hints
-    if (/(esc interrupt|ctrl\+t|ctrl\+p)/i.test(line)) continue
-
-    const isEmpty = !line.trim()
-    // Keep single empty lines for paragraph breaks, but collapse multiple
-    if (isEmpty) {
-      if (!lastWasEmpty && filtered.length > 0) {
-        filtered.push("")
-      }
-      lastWasEmpty = true
-    } else {
-      filtered.push(line)
-      lastWasEmpty = false
-    }
+async function getOpencodeClient() {
+  if (!createOpencodeFunc) {
+    const sdk = await import("@opencode-ai/sdk")
+    createOpencodeFunc = sdk.createOpencode
   }
-
-  return filtered.join("\n").trim()
+  
+  if (!opencodeInstance) {
+    opencodeInstance = await createOpencodeFunc!({
+      hostname: "127.0.0.1",
+      port: 4096,
+      timeout: 10000,
+    })
+  }
+  
+  return opencodeInstance.client
 }
 
 /**
@@ -56,41 +34,49 @@ function sanitizeOutput(chunk: string): string {
  * Converts short UI IDs to full provider/model format
  * @see https://opencode.ai for supported models
  */
-function resolveModel(model?: string): string {
-  if (!model || !model.trim()) return "anthropic/claude-sonnet-4-20250514"
-  if (model.includes("/")) return model
+function resolveModel(model?: string): { providerID: string; modelID: string } {
+  const defaultModel = { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" }
+  if (!model || !model.trim()) return defaultModel
+  
+  // If already in provider/model format
+  if (model.includes("/")) {
+    const [providerID, modelID] = model.split("/")
+    return { providerID, modelID }
+  }
 
   // Map UI model IDs to full provider/model format
-  const modelMap: Record<string, string> = {
+  const modelMap: Record<string, { providerID: string; modelID: string }> = {
     // Anthropic Claude 4 models (primary selection)
-    "claude-sonnet-4": "anthropic/claude-sonnet-4-20250514",
-    "claude-opus-4": "anthropic/claude-opus-4-20250514",
-    "claude-haiku-3.5": "anthropic/claude-haiku-3-20250513",
+    "claude-sonnet-4": { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+    "claude-opus-4": { providerID: "anthropic", modelID: "claude-opus-4-20250514" },
+    "claude-haiku-3.5": { providerID: "anthropic", modelID: "claude-haiku-3-20250513" },
     // Legacy short names (backwards compatibility)
-    sonnet: "anthropic/claude-sonnet-4-20250514",
-    opus: "anthropic/claude-opus-4-20250514",
-    haiku: "anthropic/claude-haiku-3-20250513",
+    sonnet: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+    opus: { providerID: "anthropic", modelID: "claude-opus-4-20250514" },
+    haiku: { providerID: "anthropic", modelID: "claude-haiku-3-20250513" },
     // OpenAI GPT-5 models
-    "gpt-5.2": "openai/gpt-5.2",
-    "gpt-5.1-codex": "openai/gpt-5.1-codex",
-    "gpt-4o": "openai/gpt-4o",
+    "gpt-5.2": { providerID: "openai", modelID: "gpt-5.2" },
+    "gpt-5.1-codex": { providerID: "openai", modelID: "gpt-5.1-codex" },
+    "gpt-4o": { providerID: "openai", modelID: "gpt-4o" },
     // Google Gemini 3 models
-    "gemini-3-pro": "google/gemini-3-pro",
+    "gemini-3-pro": { providerID: "google", modelID: "gemini-3-pro" },
   }
 
   const normalized = model.toLowerCase().trim()
-  return modelMap[normalized] || model
+  return modelMap[normalized] || defaultModel
 }
 
 
 /**
  * OpenCode CLI Adapter
  *
- * Spawns the opencode CLI process and converts its output to UIMessageChunk format.
- * Handles ANSI stripping, UI artifact removal, and proper process lifecycle.
+ * Uses the official OpenCode SDK for programmatic control.
+ * Supports real system prompts via noReply context injection.
  *
  * AUTH: OpenCode requires provider API keys. If user sees auth errors,
  * they should run `opencode auth login` in terminal to configure authentication.
+ * 
+ * @see https://opencode.ai/docs/sdk/
  */
 export const openCodeAdapter: CliAdapter = {
   id: "opencode",
@@ -107,178 +93,182 @@ export const openCodeAdapter: CliAdapter = {
   chat(input: ChatInput) {
     return observable<UIMessageChunk>((emit: { next: (chunk: UIMessageChunk) => void; complete: () => void; error: (err: Error) => void }) => {
       const model = resolveModel(input.model)
-
-      // Build prompt with context if provided (for conversation continuity)
-      const fullPrompt = input.contextHistory
-        ? `${input.contextHistory}\n\n---\n\nUser: ${input.prompt}`
-        : input.prompt
-
-      // Build command arguments
-      // Don't use --format json as it buffers output; use default format for streaming
-      const args = ["run", "--model", model, fullPrompt]
-
-      console.log("[OpenCode] Starting process:", {
-        cwd: input.cwd,
-        model,
-        promptLength: fullPrompt.length,
-      })
-
-      const proc = spawn("opencode", args, {
-        cwd: input.cwd,
-        env: {
-          ...process.env,
-          TERM: "xterm-256color", // Some CLIs need a proper terminal type
-          NO_COLOR: "1", // Disable color output
-          CLICOLOR: "0", // Alternative color disable
-          FORCE_COLOR: "0", // Force no colors
-        },
-        stdio: "pipe",
-      })
-
-      activeProcesses.set(input.subChatId, proc)
-
-      console.log("[OpenCode] Process spawned with PID:", proc.pid)
-
-      // Generate unique text block ID
       const textId = `opencode-text-${Date.now()}`
       let textStarted = false
-      let accumulated = ""
+      let isSubscriptionActive = true
 
-      // Emit start of message
-      emit.next({ type: "start" })
-
-      const handleOutput = (data: Buffer, source: "stdout" | "stderr") => {
-        const text = data.toString()
-        console.log(`[OpenCode] ${source} received, length:`, text.length)
-
-        const sanitized = sanitizeOutput(text)
-        if (!sanitized) return
-
-        accumulated += sanitized
-
-        // Start text block if not started
-        if (!textStarted) {
-          emit.next({ type: "text-start", id: textId })
-          textStarted = true
-        }
-
-        // Emit text delta
-        emit.next({
-          type: "text-delta",
-          id: textId,
-          delta: sanitized,
-        })
-      }
-
-      proc.stdout.on("data", (data) => handleOutput(data, "stdout"))
-      proc.stderr.on("data", (data) => handleOutput(data, "stderr"))
-
-      // Track if we've already handled an error (to prevent duplicate emits)
-      let hasErrored = false
-
-      proc.on("error", (error) => {
-        console.error("[OpenCode] Process error:", error.message)
-        hasErrored = true
-
-        // End text block if started
-        if (textStarted) {
-          emit.next({ type: "text-end", id: textId })
-        }
-
-        // Check for ENOENT (CLI not installed)
-        const isNotInstalled = error.message.includes("ENOENT") || error.message.includes("not found")
-
-        if (isNotInstalled) {
-          emit.next({
-            type: "error",
-            errorText: "OpenCode CLI not found. Install it with: npm install -g opencode",
-          })
-        } else {
-          emit.next({
-            type: "error",
-            errorText: `OpenCode error: ${error.message}`,
-          })
-        }
-        emit.next({ type: "finish" })
-        emit.complete()
-        activeProcesses.delete(input.subChatId)
-      })
-
-      proc.on("close", (code) => {
-        console.log("[OpenCode] Process closed with exit code:", code)
-        console.log("[OpenCode] Accumulated output length:", accumulated.length)
-
-        // Skip if error handler already handled this
-        if (hasErrored) {
-          console.log("[OpenCode] Skipping close handler - already handled by error handler")
+      // Safe emit that won't crash if subscription was cleaned up
+      const safeEmit = (chunk: UIMessageChunk) => {
+        if (!isSubscriptionActive) {
+          console.log("[OpenCode SDK] Skipping emit - subscription inactive")
           return
         }
+        emit.next(chunk)
+      }
 
-        if (code !== 0 && code !== null) {
-          // Check for auth-related errors in accumulated output
-          const isAuthError = accumulated.toLowerCase().includes("unauthorized") ||
-            accumulated.toLowerCase().includes("authentication") ||
-            accumulated.toLowerCase().includes("api key") ||
-            accumulated.toLowerCase().includes("invalid key") ||
-            accumulated.toLowerCase().includes("not authenticated")
+      // Run the SDK session asynchronously
+      const runSession = async () => {
+        try {
+          const client = await getOpencodeClient()
 
-          if (isAuthError) {
-            emit.next({
+          console.log("[OpenCode SDK] Creating session:", {
+            cwd: input.cwd,
+            model: `${model.providerID}/${model.modelID}`,
+            hasSystemPrompt: !!input.rootSystemPrompt,
+            systemPromptLength: input.rootSystemPrompt?.length || 0,
+          })
+
+          // Create a new session
+          const session = await client.session.create({
+            body: { title: `Session ${Date.now()}` },
+          })
+
+          if (!session.data?.id) {
+            throw new Error("Failed to create OpenCode session")
+          }
+
+          const sessionId = session.data.id
+
+          // Store session for cancellation
+          activeSessions.set(input.subChatId, {
+            sessionId,
+            abort: async () => {
+              try {
+                await client.session.abort({ path: { id: sessionId } })
+              } catch (e) {
+                console.error("[OpenCode SDK] Error aborting session:", e)
+              }
+            },
+          })
+
+          safeEmit({ type: "start" })
+
+          // Step 1: Subscribe to events for streaming (before sending prompt)
+          const events = await client.global.event()
+          
+          // Process events in background
+          const eventPromise = (async () => {
+            for await (const event of events.stream) {
+              if (!isSubscriptionActive) break
+              
+              // Handle different event types
+              if (event.type === "message.part.text.delta") {
+                if (!textStarted) {
+                  safeEmit({ type: "text-start", id: textId })
+                  textStarted = true
+                }
+                safeEmit({
+                  type: "text-delta",
+                  id: textId,
+                  delta: (event as any).properties?.content || "",
+                })
+              } else if (event.type === "message.complete") {
+                console.log("[OpenCode SDK] Message complete")
+                break
+              } else if (event.type === "session.error") {
+                console.error("[OpenCode SDK] Session error:", (event as any).properties)
+                break
+              }
+            }
+          })()
+
+          // Step 2: Build prompt with system message and context
+          const promptParts: Array<{ type: "text"; text: string }> = []
+          
+          // Add conversation history if any
+          if (input.contextHistory) {
+            promptParts.push({ type: "text", text: input.contextHistory })
+          }
+          
+          // Add user message
+          promptParts.push({ type: "text", text: input.prompt })
+
+          // Step 3: Send prompt with native system parameter (TRUE system prompt!)
+          console.log("[OpenCode SDK] Sending prompt with system message")
+          await client.session.prompt({
+            path: { id: sessionId },
+            body: {
+              model: model,
+              system: input.rootSystemPrompt || undefined,  // Native system prompt support!
+              parts: promptParts,
+            },
+          })
+
+          // Wait for events to complete
+          await eventPromise
+
+          // Cleanup
+          if (textStarted) {
+            safeEmit({ type: "text-end", id: textId })
+          }
+          safeEmit({ type: "finish" })
+          emit.complete()
+
+          activeSessions.delete(input.subChatId)
+
+        } catch (error: any) {
+          console.error("[OpenCode SDK] Error:", error)
+
+          if (textStarted) {
+            safeEmit({ type: "text-end", id: textId })
+          }
+
+          // Detect specific error types
+          const errorMessage = error.message || String(error)
+          const isNotInstalled = errorMessage.includes("ENOENT") || errorMessage.includes("not found") || errorMessage.includes("ECONNREFUSED")
+          const isAuthError = errorMessage.includes("unauthorized") ||
+            errorMessage.includes("authentication") ||
+            errorMessage.includes("api key")
+
+          if (isNotInstalled) {
+            safeEmit({
               type: "error",
-              errorText: "Authentication required. Run `opencode auth login` in your terminal to configure API keys.",
+              errorText: "OpenCode server not running. Start it with: opencode server",
+            })
+          } else if (isAuthError) {
+            safeEmit({
+              type: "error",
+              errorText: "Authentication required. Run `opencode auth login` in your terminal.",
             })
           } else {
-            emit.next({
+            safeEmit({
               type: "error",
-              errorText: `OpenCode exited with code ${code}`,
+              errorText: `OpenCode SDK error: ${errorMessage}`,
             })
           }
+
+          safeEmit({ type: "finish" })
+          emit.complete()
+          activeSessions.delete(input.subChatId)
         }
+      }
 
-        // If no output was received, emit a fallback message
-        if (!accumulated.trim()) {
-          if (!textStarted) {
-            emit.next({ type: "text-start", id: textId })
-            textStarted = true
-          }
-          emit.next({
-            type: "text-delta",
-            id: textId,
-            delta: "No response received from OpenCode. Check that the CLI is installed and configured correctly.",
-          })
-        }
+      // Start the async session
+      runSession()
 
-        // End text block
-        if (textStarted) {
-          emit.next({ type: "text-end", id: textId })
-        }
-
-        emit.next({ type: "finish" })
-        emit.complete()
-        activeProcesses.delete(input.subChatId)
-      })
-
-      // Close stdin immediately - OpenCode reads from stdin if not a TTY and waits for it
-      proc.stdin.end()
-      console.log("[OpenCode] stdin closed")
-
-      // Cleanup on unsubscribe
+      // Return cleanup function
       return () => {
-        console.log("[OpenCode] Cleanup called for subChatId:", input.subChatId)
-        if (proc.exitCode === null) {
-          proc.kill("SIGTERM")
+        console.log("[OpenCode SDK] Cleanup called for subChatId:", input.subChatId)
+        isSubscriptionActive = false
+        const activeSession = activeSessions.get(input.subChatId)
+        if (activeSession) {
+          activeSession.abort().catch((err) => {
+            console.error("[OpenCode SDK] Error aborting session:", err)
+          })
+          activeSessions.delete(input.subChatId)
         }
-        activeProcesses.delete(input.subChatId)
       }
     })
   },
 
   cancel(subChatId: string): void {
-    const proc = activeProcesses.get(subChatId)
-    if (proc && proc.exitCode === null) {
-      console.log("[OpenCode] Cancelling process for subChatId:", subChatId)
-      proc.kill("SIGTERM")
-      activeProcesses.delete(subChatId)
+    const activeSession = activeSessions.get(subChatId)
+    if (activeSession) {
+      console.log("[OpenCode SDK] Cancelling session for subChatId:", subChatId)
+      activeSession.abort().catch((err) => {
+        console.error("[OpenCode SDK] Error aborting session:", err)
+      })
+      activeSessions.delete(subChatId)
     }
   },
 }

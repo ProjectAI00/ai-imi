@@ -213,6 +213,39 @@ export const goalsRouter = router({
         total: allGoals.length,
       }
     }),
+
+  /**
+   * Create goal from Plan Mode builder output
+   */
+  createFromBuilder: publicProcedure
+    .input(
+      z.object({
+        name: z.string().min(2),
+        description: z.string().min(5),
+        priority: prioritySchema.default("medium"),
+        context: z.string().optional(),
+        workspaceId: z.string().optional(),
+      })
+    )
+    .mutation(({ input }) => {
+      const db = getDatabase()
+
+      const goal = db
+        .insert(goals)
+        .values({
+          name: input.name,
+          description: input.description,
+          workspaceId: input.workspaceId,
+          priority: input.priority,
+          context: input.context,
+          tags: "[]",
+          status: "todo",
+        })
+        .returning()
+        .get()
+
+      return { id: goal.id }
+    }),
 })
 
 // Re-export types from schema

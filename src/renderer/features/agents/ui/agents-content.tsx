@@ -37,7 +37,13 @@ import { AgentsSidebar } from "../../sidebar/agents-sidebar"
 import { AgentsSubChatsSidebar } from "../../sidebar/agents-subchats-sidebar"
 import { AgentPreview } from "./agent-preview"
 import { AgentDiffView } from "./agent-diff-view"
-import { TerminalSidebar, terminalSidebarOpenAtom } from "../../terminal"
+import {
+  TerminalSidebar,
+  terminalSidebarOpenAtom,
+  terminalSidebarWidthAtom,
+  rightPanelModeAtom,
+} from "../../terminal"
+import { RightPanelChat } from "./right-panel-chat"
 import {
   useAgentSubChatStore,
   type SubChatMeta,
@@ -70,6 +76,7 @@ export function AgentsContent() {
     agentsSubChatsSidebarModeAtom,
   )
   const setTerminalSidebarOpen = useSetAtom(terminalSidebarOpenAtom)
+  const [rightPanelMode, setRightPanelMode] = useAtom(rightPanelModeAtom)
 
   const hasOpenedSubChatsSidebar = useRef(false)
   const wasSubChatsSidebarOpen = useRef(false)
@@ -87,6 +94,10 @@ export function AgentsContent() {
   const { user } = useUser()
   const { signOut } = useClerk()
   const isAdmin = useIsAdmin()
+
+  useEffect(() => {
+    setRightPanelMode("closed")
+  }, [selectedChatId, setRightPanelMode])
 
   // Quick-switch dialog state - Agents (Opt+Ctrl+Tab)
   const [quickSwitchOpen, setQuickSwitchOpen] = useAtom(
@@ -809,8 +820,16 @@ export function AgentsContent() {
   const canShowDiff = !!chatData?.sandbox_id
 
   // Check if terminal can be shown (worktree exists - desktop only)
-  const worktreePath = (chatData as any)?.worktreePath as string | undefined
+  // Use worktreePath if available, otherwise fall back to project path
+  const worktreePath = ((chatData as any)?.worktreePath || (chatData as any)?.project?.path) as string | undefined
   const canShowTerminal = !!worktreePath
+  
+  // Debug log
+  console.log("[Terminal] chatData:", { 
+    worktreePath: (chatData as any)?.worktreePath, 
+    projectPath: (chatData as any)?.project?.path,
+    resolved: worktreePath 
+  })
 
   // Mobile layout - completely different structure
   if (isMobile) {
@@ -877,6 +896,11 @@ export function AgentsContent() {
                 selectedTeamName={selectedTeam?.name}
                 selectedTeamImageUrl={selectedTeam?.image_url}
                 isMobileFullscreen={true}
+                onToggleSubChatsSidebar={() =>
+                  setSubChatsSidebarMode((prev) =>
+                    prev === "sidebar" ? "tabs" : "sidebar",
+                  )
+                }
                 onBackToChats={() => {
                   setMobileViewMode("chats")
                   setSelectedChatId(null)
@@ -894,6 +918,20 @@ export function AgentsContent() {
                     ? () => {
                         setTerminalSidebarOpen(true)
                         setMobileViewMode("terminal")
+                      }
+                    : undefined
+                }
+                onOpenChatPanel={
+                  selectedChatId
+                    ? () => {
+                        // Toggle: closed -> chat -> terminal -> closed
+                        if (rightPanelMode === "closed") {
+                          setRightPanelMode("chat")
+                        } else if (rightPanelMode === "chat") {
+                          setRightPanelMode("terminal")
+                        } else {
+                          setRightPanelMode("closed")
+                        }
                       }
                     : undefined
                 }
@@ -946,12 +984,12 @@ export function AgentsContent() {
           />
         </ResizableSidebar>
 
-        {/* Main content */}
+        {/* Main content - show ChatView unless it's been moved to right panel */}
         <div
           className="flex-1 min-w-0 overflow-hidden"
           style={{ minWidth: "350px" }}
         >
-          {selectedChatId ? (
+          {selectedChatId && rightPanelMode !== "chat" ? (
             <div className="h-full flex flex-col relative overflow-hidden">
               <ChatView
                 key={selectedChatId}
@@ -960,7 +998,33 @@ export function AgentsContent() {
                 onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
                 selectedTeamName={selectedTeam?.name}
                 selectedTeamImageUrl={selectedTeam?.image_url}
+                onToggleSubChatsSidebar={() =>
+                  setSubChatsSidebarMode((prev) =>
+                    prev === "sidebar" ? "tabs" : "sidebar",
+                  )
+                }
+                onOpenChatPanel={() => {
+                  // Toggle right panel: closed -> chat -> terminal -> closed
+                  if (rightPanelMode === "closed") {
+                    setRightPanelMode("chat")
+                  } else if (rightPanelMode === "chat") {
+                    setRightPanelMode("terminal")
+                  } else {
+                    setRightPanelMode("closed")
+                  }
+                }}
               />
+            </div>
+          ) : selectedChatId && rightPanelMode === "chat" ? (
+            // Chat is in right panel - show workspace placeholder in center
+            <div className="h-full flex flex-col items-center justify-center bg-background text-muted-foreground">
+              <p className="text-sm">Chat moved to right panel</p>
+              <button
+                onClick={() => setRightPanelMode("closed")}
+                className="text-xs mt-2 text-primary hover:underline"
+              >
+                Move chat back
+              </button>
             </div>
           ) : (
             <div className="h-full flex flex-col relative overflow-hidden">
@@ -968,6 +1032,57 @@ export function AgentsContent() {
             </div>
           )}
         </div>
+
+        {/* Right panel - Terminal or Chat */}
+        <ResizableSidebar
+          isOpen={rightPanelMode !== "closed"}
+          onClose={() => setRightPanelMode("closed")}
+          widthAtom={terminalSidebarWidthAtom}
+          minWidth={420}
+          maxWidth={800}
+          side="right"
+          animationDuration={0}
+          initialWidth={0}
+          exitWidth={0}
+        >
+          {rightPanelMode === "terminal" && selectedChatId && worktreePath && (
+            <TerminalSidebar
+              chatId={selectedChatId}
+              cwd={worktreePath}
+              workspaceId={selectedChatId}
+              isMobileFullscreen={true}
+              onClose={() => setRightPanelMode("closed")}
+              onOpenChat={() => setRightPanelMode("chat")}
+            />
+          )}
+          {rightPanelMode === "terminal" && selectedChatId && !worktreePath && (
+            <div className="h-full flex flex-col items-center justify-center bg-background text-muted-foreground p-4">
+              <p className="text-sm">Terminal not available</p>
+              <p className="text-xs mt-1">No workspace path configured for this chat</p>
+            </div>
+          )}
+          {rightPanelMode === "chat" && selectedChatId && (
+            <div className="h-full flex flex-col overflow-hidden bg-background">
+              <ChatView
+                key={`right-panel-${selectedChatId}`}
+                chatId={selectedChatId}
+                isSidebarOpen={sidebarOpen}
+                onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
+                selectedTeamName={selectedTeam?.name}
+                selectedTeamImageUrl={selectedTeam?.image_url}
+                onToggleSubChatsSidebar={() =>
+                  setSubChatsSidebarMode((prev) =>
+                    prev === "sidebar" ? "tabs" : "sidebar",
+                  )
+                }
+                onOpenChatPanel={() => setRightPanelMode("closed")}
+                onOpenTerminal={
+                  canShowTerminal ? () => setRightPanelMode("terminal") : undefined
+                }
+              />
+            </div>
+          )}
+        </ResizableSidebar>
       </div>
 
       {/* Quick-switch dialog - Agents (Opt+Ctrl+Tab) */}

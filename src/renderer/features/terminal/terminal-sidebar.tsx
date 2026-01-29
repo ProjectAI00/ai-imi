@@ -13,6 +13,7 @@ import {
 import {
   IconDoubleChevronRight,
   CustomTerminalIcon,
+  IconChatBubble,
 } from "@/components/ui/icons"
 import { AlignJustify } from "lucide-react"
 import { Kbd } from "@/components/ui/kbd"
@@ -45,6 +46,8 @@ interface TerminalSidebarProps {
   isMobileFullscreen?: boolean
   /** Callback when closing in mobile mode */
   onClose?: () => void
+  /** Callback to switch to chat panel */
+  onOpenChat?: () => void
 }
 
 /**
@@ -85,6 +88,7 @@ export function TerminalSidebar({
   initialCommands,
   isMobileFullscreen = false,
   onClose,
+  onOpenChat,
 }: TerminalSidebarProps) {
   const [isOpen, setIsOpen] = useAtom(terminalSidebarOpenAtom)
   const [allTerminals, setAllTerminals] = useAtom(terminalsAtom)
@@ -295,10 +299,17 @@ export function TerminalSidebar({
   }, [setIsOpen])
 
   // Delay terminal rendering until animation completes to avoid xterm.js sizing issues
-  const [canRenderTerminal, setCanRenderTerminal] = useState(false)
-  const wasOpenRef = useRef(false)
+  const [canRenderTerminal, setCanRenderTerminal] = useState(isMobileFullscreen)
+  const wasOpenRef = useRef(isMobileFullscreen)
 
   useEffect(() => {
+    // For mobile fullscreen mode, always allow rendering immediately
+    if (isMobileFullscreen) {
+      setCanRenderTerminal(true)
+      wasOpenRef.current = true
+      return
+    }
+    
     if (isOpen && !wasOpenRef.current) {
       // Sidebar just opened - delay terminal render until animation completes
       setCanRenderTerminal(false)
@@ -312,14 +323,15 @@ export function TerminalSidebar({
       wasOpenRef.current = false
       setCanRenderTerminal(false)
     }
-  }, [isOpen])
+  }, [isOpen, isMobileFullscreen])
 
   // Auto-create first terminal when sidebar opens and no terminals exist
   useEffect(() => {
-    if (isOpen && terminals.length === 0) {
+    // For mobile fullscreen OR when regular sidebar opens
+    if ((isMobileFullscreen || isOpen) && terminals.length === 0) {
       createTerminal()
     }
-  }, [isOpen, terminals.length, createTerminal])
+  }, [isOpen, isMobileFullscreen, terminals.length, createTerminal])
 
   // Keyboard shortcut: Cmd+J to toggle terminal sidebar
   useEffect(() => {
@@ -467,8 +479,29 @@ export function TerminalSidebar({
             />
           )}
 
-          {/* Close button */}
+          {/* Action buttons */}
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Chat toggle button - only shown when onOpenChat is provided */}
+            {onOpenChat && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onOpenChat}
+                    className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
+                    aria-label="Switch to chat"
+                  >
+                    <IconChatBubble className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Switch to chat
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Close button */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

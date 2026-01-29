@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { router, publicProcedure } from "../index"
-import { getDatabase, projects } from "../../db"
+import { getDatabase, projects, getDefaultWorkspacePath } from "../../db"
 import { eq, desc } from "drizzle-orm"
 import { dialog, BrowserWindow } from "electron"
 import { basename } from "path"
@@ -14,6 +14,19 @@ export const projectsRouter = router({
   list: publicProcedure.query(() => {
     const db = getDatabase()
     return db.select().from(projects).orderBy(desc(projects.updatedAt)).all()
+  }),
+
+  /**
+   * Get the default workspace project (for auto-selection on first launch)
+   */
+  getDefault: publicProcedure.query(() => {
+    const db = getDatabase()
+    const defaultPath = getDefaultWorkspacePath()
+    return db
+      .select()
+      .from(projects)
+      .where(eq(projects.path, defaultPath))
+      .get() ?? null
   }),
 
   /**

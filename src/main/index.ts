@@ -3,7 +3,7 @@ import { join } from "path"
 import { createServer } from "http"
 import { readFileSync, existsSync, unlinkSync, readlinkSync } from "fs"
 import * as Sentry from "@sentry/electron/main"
-import { initDatabase, closeDatabase } from "./lib/db"
+import { initDatabase, closeDatabase, ensureDefaultWorkspace, ensureDefaultWorkspaceEntry } from "./lib/db"
 import { createMainWindow, getWindow, showLoginPage } from "./windows/main"
 import { AuthManager } from "./auth-manager"
 import {
@@ -611,6 +611,11 @@ if (gotTheLock) {
     try {
       initDatabase()
       console.log("[App] Database initialized")
+      
+      // Ensure default workspace folder and project exists
+      ensureDefaultWorkspace()
+      // Ensure default workspace entry exists (for workspace switcher)
+      ensureDefaultWorkspaceEntry()
     } catch (error) {
       console.error("[App] Failed to initialize database:", error)
     }

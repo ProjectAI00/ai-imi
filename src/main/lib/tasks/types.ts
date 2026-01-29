@@ -56,6 +56,12 @@ export interface TaskSkeleton {
   timeFrame: TimeFrameValue
   dueDate?: Date
   priority: PriorityValue
+
+  // Execution context (for AI agents)
+  workspacePath?: string // Absolute path to work in
+  relevantFiles?: string[] // Files to read/edit for this task
+  tools?: string[] // Tools needed: "bash", "edit", "grep", "web_search", etc.
+  acceptanceCriteria?: string // How do we know the task is complete?
 }
 
 // Full task (after creation)

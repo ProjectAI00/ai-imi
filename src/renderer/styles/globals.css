@@ -36,6 +36,8 @@
     --plan-mode-foreground: 0 0% 8%;
     /* Timeline/Content background */
     --tl-background: 0 0% 98%;
+    /* Shell background - gray surface behind panels */
+    --shell: 240 5% 96%;
   }
 
   .dark {
@@ -70,6 +72,8 @@
     --plan-mode-foreground: 0 0% 8%;
     /* Timeline/Content background - matches Claude input color #30302E */
     --tl-background: 60 2% 18%;
+    /* Shell background - darker surface behind panels */
+    --shell: 240 6% 10%;
   }
 }
 

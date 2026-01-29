@@ -60,6 +60,11 @@ function detectChanges(
   oldTodos: TodoItem[],
   newTodos: TodoItem[],
 ): DetectedChanges {
+  // Safety guard - ensure arrays
+  if (!Array.isArray(newTodos) || newTodos.length === 0) {
+    return { type: "creation", items: [] }
+  }
+  
   // If no old todos, this is a creation - show full list ONCE
   if (!oldTodos || oldTodos.length === 0) {
     return {
@@ -180,8 +185,12 @@ export const AgentTodoTool = memo(function AgentTodoTool({
   const creationToolCallId = todoState.creationToolCallId
 
   // Get todos from input or output.newTodos
-  const rawOldTodos = part.output?.oldTodos || []
-  const newTodos = part.input?.todos || part.output?.newTodos || []
+  const rawOldTodos = Array.isArray(part.output?.oldTodos) ? part.output.oldTodos : []
+  const newTodos = Array.isArray(part.input?.todos) 
+    ? part.input.todos 
+    : Array.isArray(part.output?.newTodos) 
+      ? part.output.newTodos 
+      : []
 
   // Determine if this is the creation tool call
   // A tool call is the "creation" if:

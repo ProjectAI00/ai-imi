@@ -41,6 +41,9 @@ export interface GoalSkeleton extends BaseSkeleton {
   tags?: string[]
   status?: GoalStatusValue
   dueDate?: Date
+  // Execution context (for AI agents)
+  workspacePath?: string // Absolute path to the workspace folder
+  relevantFiles?: string[] // Files relevant to this goal
 }
 
 // Full goal (after creation)

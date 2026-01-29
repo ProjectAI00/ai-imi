@@ -2,6 +2,7 @@ import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
 import { app, safeStorage } from "electron"
 import path from "path"
+import fs from "fs"
 import { z } from "zod"
 import {
   buildClaudeEnv,
@@ -16,16 +17,53 @@ import { openCodeAdapter } from "../../cli/adapters/opencode"
 import { cursorAdapter } from "../../cli/adapters/cursor"
 import { ampAdapter } from "../../cli/adapters/amp"
 import { droidAdapter } from "../../cli/adapters/droid"
+import { copilotAdapter } from "../../cli/adapters/copilot"
+import { codexAdapter } from "../../cli/adapters/codex"
+import { resolveAskUserResponse } from "../../cli/tools"
+import { ROOT_SYSTEM_PROMPT, getRootSystemPrompt } from "../../prompts"
+import { extractTasksFromText, toTaskSkeletons, hasTaskDefinitions } from "../../cli/task-extraction"
+import { parsePlanBuilderResponse, isPlanBuilderComplete } from "../../cli/plan-agent"
+import type { ChatInput } from "../../cli/types"
 import { AuthStore } from "../../../auth-store"
 import { buildContext, type Message } from "../../cli/context"
-import { chats, claudeCodeCredentials, getDatabase, subChats } from "../../db"
+import { chats, claudeCodeCredentials, getDatabase, goals, projects, subChats, tasks } from "../../db"
+import { buildContextForTask, buildContextForGoal } from "../../state-engine/context"
+import { onTaskComplete } from "../../state-engine/completion"
+import { wrapPromptWithInstructions } from "../../state-engine/prompt-template"
+import { calculateDueDate } from "../../tasks"
 import { publicProcedure, router } from "../index"
+
+// Regex to match file mentions in text: @[file:local:/path/to/file] or @[folder:local:/path/to/folder]
+const FILE_MENTION_REGEX = /@\[(file|folder):local:([^\]]+)\]/g
+
+/**
+ * Parse file mentions from prompt text and extract absolute file paths
+ * Returns array of file paths that need to be read
+ */
+function extractFileMentionsFromText(text: string): string[] {
+  const paths: string[] = []
+  let match
+  
+  while ((match = FILE_MENTION_REGEX.exec(text)) !== null) {
+    const filePath = match[2] // The path part after "file:local:" or "folder:local:"
+    if (filePath) {
+      paths.push(filePath)
+    }
+  }
+  
+  // Reset regex state
+  FILE_MENTION_REGEX.lastIndex = 0
+  
+  return paths
+}
 
 // Register CLI adapters
 registerAdapter(openCodeAdapter)
 registerAdapter(cursorAdapter)
 registerAdapter(ampAdapter)
 registerAdapter(droidAdapter)
+registerAdapter(copilotAdapter)
+registerAdapter(codexAdapter)
 
 /**
  * Decrypt token using Electron's safeStorage
@@ -100,6 +138,14 @@ const imageAttachmentSchema = z.object({
 
 export type ImageAttachment = z.infer<typeof imageAttachmentSchema>
 
+// File attachment schema (desktop file picker paths)
+const fileAttachmentSchema = z.object({
+  path: z.string(),
+  filename: z.string().optional(),
+  size: z.number().optional(),
+  mediaType: z.string().optional(),
+})
+
 export const claudeRouter = router({
   /**
    * Stream chat with Claude - single subscription handles everything
@@ -111,12 +157,15 @@ export const claudeRouter = router({
         chatId: z.string(),
         prompt: z.string(),
         cwd: z.string(),
-        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid"]).default("claude-code"),
+        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid", "copilot"]).default("claude-code"),
         mode: z.enum(["plan", "agent"]).default("agent"),
         sessionId: z.string().optional(),
         model: z.string().optional(),
         maxThinkingTokens: z.number().optional(), // Enable extended thinking
         images: z.array(imageAttachmentSchema).optional(), // Image attachments
+        files: z.array(fileAttachmentSchema).optional(), // File attachments
+        taskId: z.string().optional(), // Task being executed (for state engine)
+        goalId: z.string().optional(), // Goal being executed (orchestrator mode)
       }),
     )
     .subscription(({ input }) => {
@@ -150,112 +199,417 @@ export const claudeRouter = router({
 
           // Pre-check: Verify CLI is available before spawning
           ; (async () => {
-            const isAvailable = await adapter.isAvailable()
-            if (!isAvailable) {
-              const cliName = input.cli === "cursor" ? "Cursor" : input.cli === "opencode" ? "OpenCode" : input.cli
-              const installGuide = input.cli === "cursor"
-                ? "Install Cursor and enable the CLI: Cursor > Settings > Enable CLI"
-                : input.cli === "opencode"
-                  ? "Install OpenCode: npm install -g opencode"
-                  : `Install ${cliName} CLI`
+            try {
+              const isAvailable = await adapter.isAvailable()
+              if (!isAvailable) {
+                const cliName = input.cli === "cursor" ? "Cursor" : input.cli === "opencode" ? "OpenCode" : input.cli === "copilot" ? "GitHub Copilot" : input.cli
+                const installGuide = input.cli === "cursor"
+                  ? "Install Cursor and enable the CLI: Cursor > Settings > Enable CLI"
+                  : input.cli === "opencode"
+                    ? "Install OpenCode: npm install -g opencode"
+                    : input.cli === "copilot"
+                      ? "Install Copilot CLI: https://github.com/github/copilot-cli"
+                      : `Install ${cliName} CLI`
 
-              emitCliError(
-                `${cliName} CLI not found. ${installGuide}`,
-                input.cli === "cursor" ? "CURSOR_NOT_INSTALLED" : "OPENCODE_NOT_INSTALLED",
-                input.cli
-              )
-              return
-            }
-
-            // Build context from existing messages
-            const existing = db.select().from(subChats).where(eq(subChats.id, input.subChatId)).get()
-            const existingMessages = JSON.parse(existing?.messages || "[]") as Message[]
-            const contextHistory = existingMessages.length > 0
-              ? buildContext(existingMessages)
-              : undefined
-
-            // Save user message first
-            const userMessage = {
-              id: crypto.randomUUID(),
-              role: "user",
-              parts: [{ type: "text", text: input.prompt }],
-            }
-            const messagesToSave = [...existingMessages, userMessage]
-            db.update(subChats)
-              .set({ messages: JSON.stringify(messagesToSave), updatedAt: new Date() })
-              .where(eq(subChats.id, input.subChatId))
-              .run()
-
-            // Execute via adapter
-            let chatInput = {
-              ...input,
-              contextHistory,
-            }
-
-            // Inject API keys for third-party services
-            if (input.cli === "amp") {
-              const authStore = new AuthStore(app.getPath("userData"))
-              const authData = authStore.load()
-              if (authData?.ampApiKey) {
-                chatInput.ampApiKey = authData.ampApiKey
+                emitCliError(
+                  `${cliName} CLI not found. ${installGuide}`,
+                  input.cli === "cursor"
+                    ? "CURSOR_NOT_INSTALLED"
+                    : input.cli === "opencode"
+                      ? "OPENCODE_NOT_INSTALLED"
+                      : input.cli === "copilot"
+                        ? "COPILOT_NOT_INSTALLED"
+                        : "CLI_NOT_INSTALLED",
+                  input.cli
+                )
+                return
               }
+
+              // Build context from existing messages
+              const existing = db.select().from(subChats).where(eq(subChats.id, input.subChatId)).get()
+              const existingMessages = JSON.parse(existing?.messages || "[]") as Message[]
+              const existingSessionId = existing?.sessionId || undefined
+              const contextHistory = existingMessages.length > 0
+                ? buildContext(existingMessages)
+                : undefined
+              
+              // Log session state
+              if (existingSessionId) {
+                console.log(`[CLI] Found existing session ID: ${existingSessionId}`)
+              }
+
+              // Extract file mentions from prompt text (e.g., @[file:local:/path/to/file])
+              const mentionedFilePaths = extractFileMentionsFromText(input.prompt)
+              console.log(`[CLI] Found ${mentionedFilePaths.length} file mentions in prompt`)
+
+              // Read file contents from both explicit attachments and text mentions
+              // This ensures CLI tools can access file content even from restricted directories (iCloud, etc.)
+              console.log(`[CLI] Processing files for adapter:`, input.files?.length || 0, "explicit files,", mentionedFilePaths.length, "mentioned files")
+              
+              // Build set of paths already in explicit files to avoid duplicates
+              const explicitFilePaths = new Set(input.files?.map(f => f.path) || [])
+              
+              // Combine explicit file attachments with mentioned files
+              const allFilesToRead: { path: string; filename?: string }[] = [
+                ...(input.files || []),
+                ...mentionedFilePaths
+                  .filter(p => !explicitFilePaths.has(p)) // Skip duplicates
+                  .map(p => ({ path: p, filename: p.split("/").pop() || "file" }))
+              ]
+              
+              const fileAttachmentText = allFilesToRead.length
+                ? allFilesToRead
+                    .map((file) => {
+                      console.log(`[CLI] Processing file:`, file.path)
+                      const label = file.filename || file.path.split("/").pop() || "file"
+                      let content = ""
+                      try {
+                        // Check if path is absolute
+                        if (!path.isAbsolute(file.path)) {
+                          console.warn(`[CLI] Skipping non-absolute file path: ${file.path}`)
+                          return null
+                        }
+                        // Read file content directly - Electron has access even to iCloud directories
+                        const fileContent = fs.readFileSync(file.path, "utf-8")
+                        // Limit content to prevent massive prompts (100KB max per file)
+                        const maxSize = 100 * 1024
+                        content = fileContent.length > maxSize 
+                          ? fileContent.slice(0, maxSize) + "\n\n[Content truncated - file exceeds 100KB]"
+                          : fileContent
+                        console.log(`[CLI] Read file content: ${label} (${fileContent.length} bytes)`)
+                      } catch (err) {
+                        console.error(`[CLI] Failed to read file: ${file.path}`, err)
+                        content = `[Error: Could not read file - ${err instanceof Error ? err.message : "unknown error"}]`
+                      }
+                      return `--- Attached file: ${label} ---\nPath: ${file.path}\n\n${content}\n--- End of ${label} ---`
+                    })
+                    .filter(Boolean)
+                    .join("\n\n")
+                : ""
+
+              const promptWithAttachments = fileAttachmentText
+                ? `${fileAttachmentText}\n\n${input.prompt}`
+                : input.prompt
+
+              // Save user message first
+              const userMessage = {
+                id: crypto.randomUUID(),
+                role: "user",
+                parts: [{ type: "text", text: promptWithAttachments }],
+              }
+              const messagesToSave = [...existingMessages, userMessage]
+              db.update(subChats)
+                .set({ messages: JSON.stringify(messagesToSave), updatedAt: new Date() })
+                .where(eq(subChats.id, input.subChatId))
+                .run()
+
+              // Inject API keys for third-party services
+              let ampApiKey: string | undefined
+              if (input.cli === "amp") {
+                const authStore = new AuthStore(app.getPath("userData"))
+                const authData = authStore.load()
+                if (authData?.ampApiKey) {
+                  ampApiKey = authData.ampApiKey
+                }
+              }
+
+              // Execute via adapter - use mode-aware system prompt with pre-filled context
+              // Get the workspace path from the chat's project
+              const chatForPath = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+              let workspacePath: string | undefined
+              if (chatForPath?.projectId) {
+                const project = db.select().from(projects).where(eq(projects.id, chatForPath.projectId)).get()
+                workspacePath = project?.path
+                console.log(`[CLI] Found workspace path: ${workspacePath}`)
+              } else {
+                console.log(`[CLI] No projectId on chat, workspacePath will be undefined`)
+              }
+              
+              // Collect all mentioned files for pre-fill
+              const allMentionedFiles = [
+                ...mentionedFilePaths,
+                ...(input.files?.map(f => f.path) || [])
+              ]
+              console.log(`[CLI] Pre-fill context: mode=${input.mode}, workspacePath=${workspacePath}, files=${allMentionedFiles.length}`)
+              
+              // Determine if we're executing a goal/task (for execute mode prompt)
+              const isExecutingGoal = !!(input.goalId || input.taskId)
+              
+              const systemPrompt = getRootSystemPrompt({ 
+                mode: input.mode,
+                workspacePath,
+                mentionedFiles: allMentionedFiles.length > 0 ? allMentionedFiles : undefined,
+                isExecutingGoal,
+              })
+              
+              // Log if plan mode context is included
+              if (input.mode === "plan") {
+                console.log(`[CLI] Plan mode prompt includes pre-filled context: ${systemPrompt.includes("Pre-filled Context")}`)
+              }
+              
+              if (isExecutingGoal) {
+                console.log(`[CLI] Execute mode prompt included for ${input.goalId ? 'goal' : 'task'}`)
+              }
+
+              // If executing a goal or task, inject appropriate context
+              let finalPrompt = promptWithAttachments
+              if (input.goalId) {
+                // Goal mode: orchestrator sees all tasks, decides strategy
+                try {
+                  const goalContext = buildContextForGoal(input.goalId)
+                  finalPrompt = `${goalContext}\n\n---\n\nUser message: ${promptWithAttachments}`
+                  console.log(`[CLI] Injected goal context for goalId: ${input.goalId}`)
+                } catch (err) {
+                  console.warn(`[CLI] Failed to build goal context:`, err)
+                }
+              } else if (input.taskId) {
+                // Task mode: focused on one task but sees its place in goal
+                try {
+                  const taskContext = buildContextForTask(input.taskId)
+                  finalPrompt = `${taskContext}\n\n---\n\n${wrapPromptWithInstructions(promptWithAttachments)}`
+                  console.log(`[CLI] Injected task context for taskId: ${input.taskId}`)
+                } catch (err) {
+                  console.warn(`[CLI] Failed to build task context:`, err)
+                }
+              }
+              
+              const chatInput: ChatInput = {
+                ...input,
+                prompt: finalPrompt,
+                contextHistory,
+                rootSystemPrompt: systemPrompt,
+                ampApiKey,
+                // Use existing session ID if we have one (for session resume)
+                sessionId: input.sessionId || existingSessionId,
+              }
+
+              const subscription = adapter.chat(chatInput)
+
+              // Track assistant response
+              let assistantText = ""
+              let textStartEmitted = false
+              const textId = `cli-text-${Date.now()}`
+              let currentSessionId: string | undefined
+
+              subscription.subscribe({
+                next: (chunk) => {
+                  // Save session ID for future resume
+                  if (chunk.type === "session-id" && chunk.sessionId) {
+                    console.log(`[CLI] Saving session ID for resume: ${chunk.sessionId}`)
+                    currentSessionId = chunk.sessionId
+                    db.update(subChats)
+                      .set({ sessionId: chunk.sessionId, updatedAt: new Date() })
+                      .where(eq(subChats.id, input.subChatId))
+                      .run()
+                  }
+                  // Accumulate text from text-delta chunks (not "text")
+                  if (chunk.type === "text-delta" && chunk.delta) {
+                    assistantText += chunk.delta
+                  }
+                  // If we get an error chunk, ALSO emit it as a text-delta so it shows in the UI
+                  if (chunk.type === "error" && chunk.errorText) {
+                    const errorMsg = chunk.errorText
+                    assistantText += errorMsg // Add to accumulated text for saving
+                    // Emit text-start if not already emitted
+                    if (!textStartEmitted) {
+                      emit.next({ type: "text-start", id: textId })
+                      textStartEmitted = true
+                    }
+                    emit.next({
+                      type: "text-delta",
+                      id: textId,
+                      delta: errorMsg
+                    })
+                  }
+                  emit.next(chunk)
+                },
+                error: (err) => {
+                  emit.next({ type: "error", errorText: String(err) })
+                  emit.next({ type: "finish" })
+                  emit.complete()
+                },
+                complete: () => {
+                  // Save assistant message
+                  if (assistantText) {
+                    console.log(`[CLI] Stream complete. Mode: ${input.mode}, Text length: ${assistantText.length}`)
+                    console.log(`[CLI] Checking for goal/tasks blocks...`)
+                    console.log(`[CLI] Has goal block: ${assistantText.includes('\`\`\`goal')}`)
+                    console.log(`[CLI] Has tasks block: ${assistantText.includes('\`\`\`tasks')}`)
+                    
+                    const assistantMessage = {
+                      id: crypto.randomUUID(),
+                      role: "assistant",
+                      parts: [{ type: "text", text: assistantText }],
+                      metadata: currentSessionId ? { sessionId: currentSessionId } : undefined,
+                    }
+                    const finalMessages = [...messagesToSave, assistantMessage]
+                    db.update(subChats)
+                      .set({ messages: JSON.stringify(finalMessages), updatedAt: new Date() })
+                      .where(eq(subChats.id, input.subChatId))
+                      .run()
+
+                    // Extract and create tasks if in plan mode
+                    if (input.mode === "plan" && hasTaskDefinitions(assistantText)) {
+                      try {
+                        const extraction = extractTasksFromText(assistantText)
+                        
+                        if (extraction.tasks.length > 0) {
+                          console.log(`[CLI] Extracted ${extraction.tasks.length} tasks from plan mode response`)
+                          
+                          // Get project ID from chat
+                          const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                          const projectId = chat?.projectId
+                          
+                          // Create tasks in database
+                          const createdTasks: Array<{ id: string; title: string }> = []
+                          for (const task of extraction.tasks) {
+                            const timeFrame = task.timeFrame || "this_week"
+                            const dueDate = calculateDueDate(timeFrame)
+                            
+                            const created = db
+                              .insert(tasks)
+                              .values({
+                                title: task.title,
+                                description: task.description,
+                                context: task.context,
+                                tags: JSON.stringify(task.tags || []),
+                                priority: task.priority || "medium",
+                                timeFrame,
+                                dueDate,
+                                projectId,
+                                chatId: input.chatId,
+                                assigneeType: "ai",
+                                status: "todo",
+                                createdBy: "ai",
+                              })
+                              .returning()
+                              .get()
+                            
+                            createdTasks.push({ id: created.id, title: created.title })
+                          }
+                          
+                          // Emit task-created event for UI
+                          emit.next({
+                            type: "tasks-created",
+                            tasks: createdTasks,
+                          } as UIMessageChunk)
+                          
+                          console.log(`[CLI] Created ${createdTasks.length} tasks:`, createdTasks.map(t => t.title))
+                        }
+                        
+                        if (extraction.error) {
+                          console.warn(`[CLI] Task extraction warning: ${extraction.error}`)
+                        }
+                      } catch (taskError) {
+                        console.error(`[CLI] Failed to create tasks:`, taskError)
+                      }
+                    }
+
+                    // Extract and create goal/tasks from plan builder blocks (```goal and ```tasks)
+                    if (input.mode === "plan") {
+                      try {
+                        console.log(`[Plan Mode] Attempting to parse goal/tasks from response...`)
+                        const planResult = parsePlanBuilderResponse(assistantText)
+                        console.log(`[Plan Mode] Parse result:`, {
+                          hasGoal: !!planResult.goal,
+                          goalName: planResult.goal?.name,
+                          taskCount: planResult.tasks.length,
+                          isComplete: planResult.isComplete
+                        })
+                        
+                        if (isPlanBuilderComplete(planResult)) {
+                          console.log(`[Plan Mode] Found complete plan with goal and ${planResult.tasks.length} tasks`)
+                          
+                          // Get project ID from chat for workspaceId
+                          const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                          const workspaceId = chat?.projectId
+                          
+                          // Create goal in database
+                          const createdGoal = db
+                            .insert(goals)
+                            .values({
+                              name: planResult.goal!.name!,
+                              description: planResult.goal!.description!,
+                              workspaceId,
+                              priority: planResult.goal!.priority || "medium",
+                              context: planResult.goal!.context,
+                              tags: "[]",
+                              status: "todo",
+                              // Execution context
+                              workspacePath: planResult.goal!.workspacePath,
+                              relevantFiles: JSON.stringify(planResult.goal!.relevantFiles || []),
+                            })
+                            .returning()
+                            .get()
+                          
+                          // Create tasks linked to the goal
+                          const createdTaskIds: string[] = []
+                          for (const taskSkeleton of planResult.tasks) {
+                            const timeFrame = taskSkeleton.timeFrame || "this_week"
+                            const dueDate = calculateDueDate(timeFrame)
+                            
+                            const created = db
+                              .insert(tasks)
+                              .values({
+                                title: taskSkeleton.title!,
+                                description: taskSkeleton.description!,
+                                context: taskSkeleton.context,
+                                tags: JSON.stringify(taskSkeleton.tags || []),
+                                priority: taskSkeleton.priority || "medium",
+                                timeFrame,
+                                dueDate,
+                                projectId: workspaceId,
+                                goalId: createdGoal.id,
+                                chatId: input.chatId,
+                                assigneeType: "ai",
+                                status: "todo",
+                                createdBy: "ai",
+                                // Execution context
+                                workspacePath: taskSkeleton.workspacePath || planResult.goal!.workspacePath,
+                                relevantFiles: JSON.stringify(taskSkeleton.relevantFiles || []),
+                                tools: JSON.stringify(taskSkeleton.tools || []),
+                                acceptanceCriteria: taskSkeleton.acceptanceCriteria,
+                              })
+                              .returning()
+                              .get()
+                            
+                            createdTaskIds.push(created.id)
+                          }
+                          
+                          console.log(`[Plan Mode] Created goal: ${createdGoal.id}, tasks: ${createdTaskIds.length}`)
+                          
+                          // Emit goal-created event for UI
+                          emit.next({
+                            type: "goal-created",
+                            goalId: createdGoal.id,
+                            goalName: createdGoal.name,
+                            taskCount: createdTaskIds.length,
+                          } as UIMessageChunk)
+                        }
+                      } catch (planError) {
+                        console.error(`[Plan Mode] Failed to create goal/tasks:`, planError)
+                      }
+                    }
+
+                    // Handle task completion for state engine
+                    if (input.taskId) {
+                      onTaskComplete(input.taskId, assistantText)
+                        .then(() => console.log(`[CLI] Task completed: ${input.taskId}`))
+                        .catch((err) => console.error(`[CLI] Failed to handle task completion:`, err))
+                    }
+                  }
+                  emit.next({ type: "finish" })
+                  emit.complete()
+                },
+              })
+            } catch (error) {
+              const errorText = error instanceof Error ? error.message : String(error)
+              emitCliError(`Failed to start ${input.cli}: ${errorText}`, "CLI_SETUP_ERROR", input.cli)
             }
-
-            const subscription = adapter.chat(chatInput)
-
-            // Track assistant response
-            let assistantText = ""
-            let textStartEmitted = false
-            const textId = `cli-text-${Date.now()}`
-
-            subscription.subscribe({
-              next: (chunk) => {
-                // Accumulate text from text-delta chunks (not "text")
-                if (chunk.type === "text-delta" && chunk.delta) {
-                  assistantText += chunk.delta
-                }
-                // If we get an error chunk, ALSO emit it as a text-delta so it shows in the UI
-                if (chunk.type === "error" && chunk.errorText) {
-                  const errorMsg = chunk.errorText
-                  assistantText += errorMsg // Add to accumulated text for saving
-                  // Emit text-start if not already emitted
-                  if (!textStartEmitted) {
-                    emit.next({ type: "text-start", id: textId })
-                    textStartEmitted = true
-                  }
-                  emit.next({
-                    type: "text-delta",
-                    id: textId,
-                    delta: errorMsg
-                  })
-                }
-                emit.next(chunk)
-              },
-              error: (err) => {
-                emit.next({ type: "error", errorText: String(err) })
-                emit.next({ type: "finish" })
-                emit.complete()
-              },
-              complete: () => {
-                // Save assistant message
-                if (assistantText) {
-                  const assistantMessage = {
-                    id: crypto.randomUUID(),
-                    role: "assistant",
-                    parts: [{ type: "text", text: assistantText }],
-                  }
-                  const finalMessages = [...messagesToSave, assistantMessage]
-                  db.update(subChats)
-                    .set({ messages: JSON.stringify(finalMessages), updatedAt: new Date() })
-                    .where(eq(subChats.id, input.subChatId))
-                    .run()
-                }
-                emit.complete()
-              },
-            })
           })()
 
           return () => {
+            console.log(`[CLI] Cleanup called for CLI adapter: ${input.cli}, subChatId: ${input.subChatId}`)
             adapter.cancel(input.subChatId)
           }
         }
@@ -389,24 +743,62 @@ export const claudeRouter = router({
               // Capture stderr from Claude process for debugging
               const stderrLines: string[] = []
 
-              // Build prompt: if there are images, create an AsyncIterable<SDKUserMessage>
+              // Build prompt: if there are images/files, create an AsyncIterable<SDKUserMessage>
               // Otherwise use simple string prompt
               let prompt: string | AsyncIterable<any> = input.prompt
 
-              if (input.images && input.images.length > 0) {
-                // Create message content array with images first, then text
-                const messageContent: any[] = [
-                  ...input.images.map((img) => ({
-                    type: "image" as const,
-                    source: {
-                      type: "base64" as const,
-                      media_type: img.mediaType,
-                      data: img.base64Data,
-                    },
-                  })),
-                ]
+              // If executing a goal or task, inject appropriate context
+              if (input.goalId) {
+                // Goal mode: orchestrator sees all tasks, decides strategy
+                try {
+                  const goalContext = buildContextForGoal(input.goalId)
+                  prompt = `${goalContext}\n\n---\n\nUser message: ${input.prompt}`
+                  console.log(`[Claude SDK] Injected goal context for goalId: ${input.goalId}`)
+                } catch (err) {
+                  console.warn(`[Claude SDK] Failed to build goal context:`, err)
+                }
+              } else if (input.taskId) {
+                // Task mode: focused on one task but sees its place in goal
+                try {
+                  const taskContext = buildContextForTask(input.taskId)
+                  prompt = `${taskContext}\n\n---\n\n${wrapPromptWithInstructions(input.prompt)}`
+                  console.log(`[Claude SDK] Injected task context for taskId: ${input.taskId}`)
+                } catch (err) {
+                  console.warn(`[Claude SDK] Failed to build task context:`, err)
+                }
+              }
 
-                // Add text if present
+              const hasImages = input.images && input.images.length > 0
+              const hasFiles = input.files && input.files.length > 0
+
+              if (hasImages || hasFiles) {
+                const messageContent: any[] = []
+
+                if (hasFiles) {
+                  messageContent.push({
+                    type: "text" as const,
+                    text: input.files
+                      .map((file) => {
+                        const label = file.filename || file.path.split("/").pop() || "file"
+                        return `Attached file: ${label}\nPath: ${file.path}`
+                      })
+                      .join("\n\n"),
+                  })
+                }
+
+                if (hasImages) {
+                  messageContent.push(
+                    ...input.images.map((img) => ({
+                      type: "image" as const,
+                      source: {
+                        type: "base64" as const,
+                        media_type: img.mediaType,
+                        data: img.base64Data,
+                      },
+                    })),
+                  )
+                }
+
                 if (input.prompt.trim()) {
                   messageContent.push({
                     type: "text" as const,
@@ -414,8 +806,7 @@ export const claudeRouter = router({
                   })
                 }
 
-                // Create an async generator that yields a single SDKUserMessage
-                async function* createPromptWithImages() {
+                async function* createPromptWithAttachments() {
                   yield {
                     type: "user" as const,
                     message: {
@@ -426,7 +817,7 @@ export const claudeRouter = router({
                   }
                 }
 
-                prompt = createPromptWithImages()
+                prompt = createPromptWithAttachments()
               }
 
               // Build full environment for Claude SDK (includes HOME, PATH, etc.)
@@ -471,7 +862,8 @@ export const claudeRouter = router({
                   systemPrompt: {
                     type: "preset" as const,
                     preset: "claude_code" as const,
-                    append: " ",
+                    // Use mode-aware prompt - includes PLAN_MODE_PROMPT when in plan mode
+                    append: `\n\n${getRootSystemPrompt({ mode: input.mode })}`,
                   },
                   env: finalEnv,
                   permissionMode:
@@ -535,6 +927,101 @@ export const claudeRouter = router({
                         updatedInput: response.updatedInput,
                       }
                     }
+
+                    // Intercept TodoWrite in Plan Mode to create goals/tasks in our database
+                    if (input.mode === "plan" && toolName === "TodoWrite") {
+                      try {
+                        const todosMarkdown = (toolInput as any).todos as string
+                        console.log(`[Claude SDK] TodoWrite intercepted in plan mode, parsing todos...`)
+                        
+                        // Parse markdown checklist to extract goal name and tasks
+                        // Format: "# Goal Name\n- [ ] Task 1\n- [ ] Task 2" or just "- [ ] Task 1\n- [ ] Task 2"
+                        const lines = todosMarkdown.split("\n").filter((l: string) => l.trim())
+                        
+                        // Extract goal name from heading or first line
+                        let goalName = "Plan"
+                        const headingMatch = todosMarkdown.match(/^#\s+(.+)$/m)
+                        if (headingMatch) {
+                          goalName = headingMatch[1].trim()
+                        }
+                        
+                        // Extract tasks from checklist items
+                        const taskTitles: string[] = []
+                        for (const line of lines) {
+                          // Match: "- [ ] Task title" or "- [x] Task title" or just "- Task title"
+                          const taskMatch = line.match(/^[-*]\s*(?:\[[ x]\]\s*)?(.+)$/i)
+                          if (taskMatch && !line.startsWith("#")) {
+                            taskTitles.push(taskMatch[1].trim())
+                          }
+                        }
+                        
+                        if (taskTitles.length > 0) {
+                          const db = getDatabase()
+                          
+                          // Get project info for the goal
+                          const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                          const project = chat?.projectId 
+                            ? db.select().from(projects).where(eq(projects.id, chat.projectId)).get()
+                            : null
+                          
+                          // Create goal
+                          const goal = db
+                            .insert(goals)
+                            .values({
+                              name: goalName,
+                              description: `Plan created from chat: ${taskTitles.length} tasks`,
+                              priority: "medium",
+                              status: "todo",
+                              workspacePath: project?.path || input.cwd,
+                            })
+                            .returning()
+                            .get()
+                          
+                          console.log(`[Claude SDK] Created goal: ${goal.id} - ${goal.name}`)
+                          
+                          // Create tasks
+                          const createdTaskIds: string[] = []
+                          for (const title of taskTitles) {
+                            const task = db
+                              .insert(tasks)
+                              .values({
+                                title,
+                                description: title,
+                                priority: "medium",
+                                goalId: goal.id,
+                                status: "todo",
+                                createdBy: "ai",
+                              })
+                              .returning()
+                              .get()
+                            createdTaskIds.push(task.id)
+                            console.log(`[Claude SDK] Created task: ${task.id} - ${title}`)
+                          }
+                          
+                          // Update subChat to link to this goal
+                          db.update(subChats)
+                            .set({ goalId: goal.id, updatedAt: new Date() })
+                            .where(eq(subChats.id, input.subChatId))
+                            .run()
+                          
+                          console.log(`[Claude SDK] Plan mode: created goal ${goal.id} with ${createdTaskIds.length} tasks`)
+                          
+                          // Emit goal-created event so UI can show it
+                          safeEmit({
+                            type: "goal-created",
+                            goalId: goal.id,
+                            goalName: goal.name,
+                            taskCount: createdTaskIds.length,
+                          } as UIMessageChunk)
+                        }
+                      } catch (todoErr) {
+                        console.error(`[Claude SDK] Failed to create goal/tasks from TodoWrite:`, todoErr)
+                      }
+                      
+                      // Still allow the tool to run normally (shows in UI)
+                      return { behavior: "allow", updatedInput: toolInput }
+                    }
+
                     return {
                       behavior: "allow",
                       updatedInput: toolInput,
@@ -901,6 +1388,97 @@ export const claudeRouter = router({
                   })
                   .where(eq(subChats.id, input.subChatId))
                   .run()
+
+                // Extract and create goal/tasks from plan builder blocks (```goal and ```tasks)
+                if (input.mode === "plan") {
+                  try {
+                    // Extract text content from parts
+                    const fullText = parts
+                      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                      .map((p) => p.text)
+                      .join("\n")
+
+                    const planResult = parsePlanBuilderResponse(fullText)
+                    if (isPlanBuilderComplete(planResult)) {
+                      console.log(`[Plan Mode] Found complete plan with goal and ${planResult.tasks.length} tasks`)
+
+                      // Get project ID from chat for workspaceId
+                      const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                      const workspaceId = chat?.projectId
+
+                      // Create goal in database
+                      const createdGoal = db
+                        .insert(goals)
+                        .values({
+                          name: planResult.goal!.name!,
+                          description: planResult.goal!.description!,
+                          workspaceId,
+                          priority: planResult.goal!.priority || "medium",
+                          context: planResult.goal!.context,
+                          tags: "[]",
+                          status: "todo",
+                        })
+                        .returning()
+                        .get()
+
+                      // Create tasks linked to the goal
+                      const createdTaskIds: string[] = []
+                      for (const taskSkeleton of planResult.tasks) {
+                        const timeFrame = taskSkeleton.timeFrame || "this_week"
+                        const dueDate = calculateDueDate(timeFrame)
+
+                        const created = db
+                          .insert(tasks)
+                          .values({
+                            title: taskSkeleton.title!,
+                            description: taskSkeleton.description!,
+                            context: taskSkeleton.context,
+                            tags: JSON.stringify(taskSkeleton.tags || []),
+                            priority: taskSkeleton.priority || "medium",
+                            timeFrame,
+                            dueDate,
+                            projectId: workspaceId,
+                            goalId: createdGoal.id,
+                            chatId: input.chatId,
+                            assigneeType: "ai",
+                            status: "todo",
+                            createdBy: "ai",
+                          })
+                          .returning()
+                          .get()
+
+                        createdTaskIds.push(created.id)
+                      }
+
+                      console.log(`[Plan Mode] Created goal: ${createdGoal.id}, tasks: ${createdTaskIds.length}`)
+
+                      // Emit goal-created event for UI
+                      safeEmit({
+                        type: "goal-created",
+                        goalId: createdGoal.id,
+                        goalName: createdGoal.name,
+                        taskCount: createdTaskIds.length,
+                      } as UIMessageChunk)
+                    }
+                  } catch (planError) {
+                    console.error(`[Plan Mode] Failed to create goal/tasks:`, planError)
+                  }
+                }
+
+                // Handle task completion for state engine
+                if (input.taskId) {
+                  try {
+                    // Collect all text output from the session
+                    const collectedOutput = parts
+                      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                      .map((p) => p.text)
+                      .join("\n")
+                    await onTaskComplete(input.taskId, collectedOutput)
+                    console.log(`[Claude SDK] Task completed: ${input.taskId}`)
+                  } catch (err) {
+                    console.error(`[Claude SDK] Failed to handle task completion:`, err)
+                  }
+                }
               } else {
                 // No assistant response - just clear streamId
                 db.update(subChats)
@@ -988,17 +1566,30 @@ export const claudeRouter = router({
       }),
     )
     .mutation(({ input }) => {
+      // Try Claude Code pending approvals first
       const pending = pendingToolApprovals.get(input.toolUseId)
-      if (!pending) {
-        return { ok: false }
+      if (pending) {
+        pending.resolve({
+          approved: input.approved,
+          message: input.message,
+          updatedInput: input.updatedInput,
+        })
+        pendingToolApprovals.delete(input.toolUseId)
+        return { ok: true }
       }
-      pending.resolve({
-        approved: input.approved,
-        message: input.message,
-        updatedInput: input.updatedInput,
-      })
-      pendingToolApprovals.delete(input.toolUseId)
-      return { ok: true }
+      
+      // Try Copilot SDK ask_user responses
+      // For Copilot, the "approved" flow means answers were provided
+      if (input.approved && input.updatedInput) {
+        const answers = input.updatedInput as Record<string, string>
+        resolveAskUserResponse(input.toolUseId, { answers })
+        return { ok: true }
+      } else if (!input.approved) {
+        resolveAskUserResponse(input.toolUseId, { error: input.message || "User skipped question" })
+        return { ok: true }
+      }
+      
+      return { ok: false }
     }),
 
   /**

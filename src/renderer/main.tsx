@@ -10,6 +10,8 @@ import { App } from "./App"
 import "./styles/globals.css"
 import { preloadDiffHighlighter } from "./lib/themes/diff-view-highlighter"
 
+console.log("[main.tsx] Script starting...")
+
 // Preload shiki highlighter for diff view (prevents delay when opening diff sidebar)
 preloadDiffHighlighter()
 
@@ -40,7 +42,20 @@ window.onerror = (message, source, lineno, colno, error) => {
 }
 
 const rootElement = document.getElementById("root")
+console.log("[main.tsx] Root element found:", !!rootElement)
 
 if (rootElement) {
-  ReactDOM.createRoot(rootElement).render(<App />)
+  console.log("[main.tsx] Creating React root...")
+  try {
+    const root = ReactDOM.createRoot(rootElement)
+    console.log("[main.tsx] Rendering App...")
+    root.render(<App />)
+    console.log("[main.tsx] App rendered!")
+  } catch (error) {
+    console.error("[main.tsx] Failed to render App:", error)
+    // Show error in DOM
+    rootElement.innerHTML = `<div style="padding: 20px; color: red;">Failed to start: ${error}</div>`
+  }
+} else {
+  console.error("[main.tsx] Root element not found!")
 }

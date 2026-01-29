@@ -462,12 +462,29 @@ export function AgentsSubChatsSidebar({
     if (!parentChatId) return
 
     const store = useAgentSubChatStore.getState()
+    const activeSubChat = allSubChats.find((sc) => sc.id === activeSubChatId)
+    const inheritedCli =
+      (activeSubChat?.cli as
+        | "claude-code"
+        | "opencode"
+        | "cursor"
+        | "amp"
+        | "droid"
+        | "copilot") || "claude-code"
+    const inheritedModel = activeSubChat?.model
+    // Inherit goalId and taskId from active sub-chat so new chats stay in goal context
+    const inheritedGoalId = activeSubChat?.goalId
+    const inheritedTaskId = activeSubChat?.taskId
 
     // Create sub-chat in DB first to get the real ID
     const newSubChat = await trpcClient.chats.createSubChat.mutate({
       chatId: parentChatId,
       name: "New Agent",
       mode: "agent",
+      cli: inheritedCli,
+      model: inheritedModel,
+      goalId: inheritedGoalId,
+      taskId: inheritedTaskId,
     })
     const newId = newSubChat.id
 
@@ -480,6 +497,10 @@ export function AgentsSubChatsSidebar({
       name: "New Agent",
       created_at: new Date().toISOString(),
       mode: "agent",
+      cli: inheritedCli,
+      model: inheritedModel,
+      goalId: inheritedGoalId,
+      taskId: inheritedTaskId,
     })
 
     // Add to open tabs and set as active
@@ -859,59 +880,51 @@ export function AgentsSubChatsSidebar({
       )}
 
       {/* Header */}
-      <div className="p-2 pb-3 flex-shrink-0">
-        <div className="space-y-2">
-          {/* Top row - different layout based on agents sidebar state */}
-          {isSidebarOpen ? (
-            <div
-              className="h-6"
-              style={{
-                // @ts-expect-error - WebKit-specific property for Electron window dragging
-                WebkitAppRegion:
-                  isDesktop && !isFullscreen ? "drag" : undefined,
-              }}
-            />
-          ) : (
-            <div
-              className="flex items-center justify-between gap-1 mb-1"
-              style={{
-                // @ts-expect-error - WebKit-specific property for Electron window dragging
-                WebkitAppRegion:
-                  isDesktop && !isFullscreen ? "drag" : undefined,
-              }}
-            >
-              {onBackToChats && (
-                <Tooltip delayDuration={500}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={onBackToChats}
-                      tabIndex={-1}
-                      className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] flex-shrink-0 rounded-md"
-                      aria-label="Toggle agents sidebar"
-                      style={{
-                        // @ts-expect-error - WebKit-specific property
-                        WebkitAppRegion: "no-drag",
-                      }}
-                    >
-                      <AlignJustify className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Open chats sidebar</TooltipContent>
-                </Tooltip>
-              )}
-              <div className="flex-1" />
-              <div
-                style={{
-                  // @ts-expect-error - WebKit-specific property
-                  WebkitAppRegion: "no-drag",
-                }}
-              >
-                {headerButtons}
+      <div className="p-2 pb-2 flex-shrink-0">
+        <div className="space-y-1.5">
+          {/* Top row - align with Tasks sidebar */}
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <div className="flex items-center gap-1 p-0.5 bg-muted/50 rounded-lg h-9">
+                <button
+                  onClick={onBackToChats}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
+                    "bg-background text-foreground shadow-sm",
+                  )}
+                  style={{
+                    // @ts-expect-error - WebKit-specific property
+                    WebkitAppRegion: isDesktop && !isFullscreen ? "no-drag" : undefined,
+                  }}
+                >
+                  <IconChatBubble className="w-4 h-4" />
+                  <span>Chats</span>
+                </button>
+                <div className="flex-1" />
               </div>
             </div>
-          )}
+            {onClose && (
+              <Tooltip delayDuration={500}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onClose}
+                    tabIndex={-1}
+                    className="h-8 w-8 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
+                    aria-label="Close sidebar"
+                    style={{
+                      // @ts-expect-error - WebKit-specific property
+                      WebkitAppRegion: "no-drag",
+                    }}
+                  >
+                    <IconDoubleChevronLeft className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Close chats pane</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
           {/* Search Input */}
           <div className="relative">
             <Input
@@ -958,7 +971,7 @@ export function AgentsSubChatsSidebar({
                   return
                 }
               }}
-              className="h-7 w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40"
+              className="h-9 w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40"
             />
           </div>
           {/* New Chat Button */}
@@ -968,7 +981,7 @@ export function AgentsSubChatsSidebar({
                 onClick={handleCreateNew}
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg"
+                className="h-9 px-3 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg"
               >
                 <span className="text-sm font-medium">New Chat</span>
               </Button>

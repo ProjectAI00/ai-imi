@@ -139,9 +139,14 @@ async function getEntryList(projectPath: string): Promise<FileEntry[]> {
 
 /**
  * Filter and sort entries (files and folders) by query
+ * @param entries - Array of file entries with relative paths
+ * @param projectPath - The root project path to make absolute paths
+ * @param query - Search query
+ * @param limit - Max number of results
  */
 function filterEntries(
   entries: FileEntry[],
+  projectPath: string,
   query: string,
   limit: number
 ): Array<{ id: string; label: string; path: string; repository: string; type: "file" | "folder" }> {
@@ -197,14 +202,17 @@ function filterEntries(
   // Limit results
   const limited = filtered.slice(0, Math.min(limit, 200))
 
-  // Map to expected format with type
-  return limited.map((entry) => ({
-    id: `${entry.type}:local:${entry.path}`,
-    label: basename(entry.path),
-    path: entry.path,
-    repository: "local",
-    type: entry.type,
-  }))
+  // Map to expected format with type - use ABSOLUTE paths
+  return limited.map((entry) => {
+    const absolutePath = join(projectPath, entry.path)
+    return {
+      id: `${entry.type}:local:${absolutePath}`,
+      label: basename(entry.path),
+      path: absolutePath,  // Full absolute path for file reading
+      repository: "local",
+      type: entry.type,
+    }
+  })
 }
 
 export const filesRouter = router({
@@ -242,8 +250,8 @@ export const filesRouter = router({
         const fileCount = entries.filter(e => e.type === "file").length
         console.log(`[files] Scanned ${projectPath}: ${folderCount} folders, ${fileCount} files`)
 
-        // Filter and sort by query
-        const results = filterEntries(entries, query, limit)
+        // Filter and sort by query - pass projectPath to build absolute paths
+        const results = filterEntries(entries, projectPath, query, limit)
         console.log(`[files] Query "${query}": returning ${results.length} results, folders: ${results.filter(r => r.type === "folder").length}`)
         return results
       } catch (error) {

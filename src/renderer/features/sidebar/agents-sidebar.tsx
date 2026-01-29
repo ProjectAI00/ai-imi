@@ -73,6 +73,8 @@ import {
   QuestionCircleIcon,
   KeyboardIcon,
   TicketIcon,
+  IconChatBubble,
+  CheckIcon,
 } from "../../components/ui/icons"
 import { Logo } from "../../components/ui/logo"
 import { Input } from "../../components/ui/input"
@@ -99,6 +101,7 @@ import { useHotkeys } from "react-hotkeys-hook"
 import { Checkbox } from "../../components/ui/checkbox"
 import { useHaptic } from "./hooks/use-haptic"
 import { TypewriterText } from "../../components/ui/typewriter-text"
+import { GoalsTreeSidebar } from "./goals-tree-sidebar"
 
 // Feedback URL: uses env variable for hosted version, falls back to public Discord for open source
 const FEEDBACK_URL =
@@ -179,11 +182,7 @@ const ChatIcon = React.memo(function ChatIcon({
         <div
           className={cn(
             "absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center",
-            // Светлая тема: выбран/ховер #E8E8E8
-            // Темная тема: дефолт #101010, выбран/ховер #1B1B1B
-            isSelected
-              ? "bg-[#E8E8E8] dark:bg-[#1B1B1B]"
-              : "bg-[#F4F4F4] group-hover:bg-[#E8E8E8] dark:bg-[#101010] dark:group-hover:bg-[#1B1B1B]",
+            "bg-background",
           )}
         >
           {isLoading ? (
@@ -205,6 +204,8 @@ interface AgentsSidebarProps {
   onToggleSidebar?: () => void
   isMobileFullscreen?: boolean
   onChatSelect?: () => void
+  navViewMode?: "chats" | "tasks"
+  onNavViewModeChange?: (mode: "chats" | "tasks") => void
 }
 
 export function AgentsSidebar({
@@ -219,6 +220,8 @@ export function AgentsSidebar({
   onToggleSidebar,
   isMobileFullscreen = false,
   onChatSelect,
+  navViewMode = "chats",
+  onNavViewModeChange,
 }: AgentsSidebarProps) {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
@@ -243,9 +246,6 @@ export function AgentsSidebar({
   const selectAllChats = useSetAtom(selectAllAgentChatsAtom)
   const clearChatSelection = useSetAtom(clearAgentChatSelectionAtom)
 
-  // Scroll gradient state for agents list
-  const [showBottomGradient, setShowBottomGradient] = useState(false)
-  const [showTopGradient, setShowTopGradient] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   // Multiple drafts state - uses event-based sync instead of polling
@@ -774,29 +774,6 @@ export function AgentsSidebar({
   }, [])
 
   // Check if scroll is needed and show/hide gradients
-  React.useEffect(() => {
-    const container = scrollContainerRef.current
-    if (!container) return
-
-    const checkScroll = () => {
-      const needsScroll = container.scrollHeight > container.clientHeight
-      if (needsScroll) {
-        setShowBottomGradient(true)
-        setShowTopGradient(false)
-      } else {
-        setShowBottomGradient(false)
-        setShowTopGradient(false)
-      }
-    }
-
-    checkScroll()
-    // Re-check when content might change
-    const resizeObserver = new ResizeObserver(checkScroll)
-    resizeObserver.observe(container)
-
-    return () => resizeObserver.disconnect()
-  }, [filteredChats])
-
   // Direct listener for Cmd+F to focus search input
   useEffect(() => {
     const handleSearchHotkey = (e: KeyboardEvent) => {
@@ -876,26 +853,9 @@ export function AgentsSidebar({
     clearChatSelection()
   }, [selectedProject?.id, clearChatSelection])
 
-  // Handle scroll for gradients
-  const handleAgentsScroll = React.useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
-      const needsScroll = scrollHeight > clientHeight
-
-      if (!needsScroll) {
-        setShowBottomGradient(false)
-        setShowTopGradient(false)
-        return
-      }
-
-      const isAtBottom = scrollTop + clientHeight >= scrollHeight - 5
-      const isAtTop = scrollTop <= 5
-
-      setShowBottomGradient(!isAtBottom)
-      setShowTopGradient(!isAtTop)
-    },
-    [],
-  )
+  const handleAgentsScroll = React.useCallback(() => {
+    // No-op scroll handler
+  }, [])
 
   // Mobile fullscreen mode - render without ResizableSidebar wrapper
   const sidebarContent = (
@@ -904,7 +864,7 @@ export function AgentsSidebar({
         "group/sidebar flex flex-col gap-0 overflow-hidden select-none",
         isMobileFullscreen
           ? "h-full w-full bg-background"
-          : "h-full bg-tl-background",
+          : "h-full bg-shell",
       )}
       onMouseEnter={() => setIsSidebarHovered(true)}
       onMouseLeave={(e) => {
@@ -921,391 +881,132 @@ export function AgentsSidebar({
       data-mobile-fullscreen={isMobileFullscreen || undefined}
       data-sidebar-content
     >
-      {/* Header area with close button at top-right (next to traffic lights) */}
-      {/* This div has its own hover handlers because the drag region blocks events from bubbling to parent */}
-      <div
-        className="relative flex-shrink-0"
-        onMouseEnter={() => setIsSidebarHovered(true)}
-        onMouseLeave={(e) => {
-          // Electron's drag region (WebkitAppRegion: "drag") returns a non-HTMLElement
-          // object as relatedTarget. We preserve hover state in this case so the
-          // traffic lights remain visible when hovering over the drag area.
-          const relatedTarget = e.relatedTarget
-          if (!relatedTarget || !(relatedTarget instanceof HTMLElement)) return
-          const isStillInSidebar = relatedTarget.closest(
-            "[data-sidebar-content]",
-          )
-          if (!isStillInSidebar) {
-            setIsSidebarHovered(false)
-          }
-        }}
-      >
-        {/* Draggable area for window movement - background layer (hidden in fullscreen) */}
-        {isDesktop && !isFullscreen && (
-          <div
-            className="absolute inset-x-0 top-0 h-[32px] z-0"
-            style={{
-              // @ts-expect-error - WebKit-specific property
-              WebkitAppRegion: "drag",
-            }}
-            data-sidebar-content
-          />
-        )}
-
-        {/* Custom traffic lights - positioned at top left, centered in 32px area */}
-        <TrafficLights
-          isHovered={isSidebarHovered || isDropdownOpen}
-          isFullscreen={isFullscreen}
-          isDesktop={isDesktop}
-          className="absolute left-4 top-[14px] z-20"
-        />
-
-        {/* Close button - positioned at top right, adjusted for traffic lights area when not fullscreen */}
-        {!isMobileFullscreen && (
-          <div
-            className={cn(
-              "absolute right-2 z-20 transition-opacity duration-150",
-              // In fullscreen or non-desktop, position at top-2. In desktop mode with traffic lights, also top-2
-              "top-2",
-              isSidebarHovered || isDropdownOpen ? "opacity-100" : "opacity-0",
-            )}
-            style={{
-              // Make clickable over drag region
-              // @ts-expect-error - WebKit-specific property
-              WebkitAppRegion: "no-drag",
-            }}
-          >
-            <TooltipProvider>
-              <Tooltip delayDuration={500}>
-                <TooltipTrigger asChild>
-                  <ButtonCustom
-                    variant="ghost"
-                    size="icon"
-                    onClick={onToggleSidebar}
-                    tabIndex={-1}
-                    className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
-                    aria-label="Close sidebar"
-                  >
-                    <IconDoubleChevronLeft className="h-4 w-4" />
-                  </ButtonCustom>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Close sidebar
-                  <Kbd>⌘\</Kbd>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-        )}
-
-        {/* Spacer for macOS traffic lights (close/minimize/maximize) */}
-        <TrafficLightSpacer isFullscreen={isFullscreen} isDesktop={isDesktop} />
-
-        {/* Team dropdown - below traffic lights */}
-        <div className="px-2 pt-2 pb-2">
-          <div className="flex items-center gap-1">
-            {/* Tiny team dropdown */}
-            <div className="flex-1 min-w-0">
-              <DropdownMenu
-                open={isDropdownOpen}
-                onOpenChange={setIsDropdownOpen}
+      {/* Unified header: tabs + close */}
+      <div className="px-2 pt-2 pb-1 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <div className="flex items-center gap-1 p-0.5 bg-muted/50 rounded-lg h-9">
+              <button
+                onClick={() => onNavViewModeChange?.("chats")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
+                  navViewMode === "chats"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
               >
-                <DropdownMenuTrigger asChild>
-                  <ButtonCustom
-                    variant="ghost"
-                    className="h-6 px-1.5 justify-start hover:bg-foreground/10 rounded-md group/team-button max-w-full"
-                    suppressHydrationWarning
-                  >
-                    <div className="flex items-center gap-1.5 min-w-0 max-w-full">
-                      <div className="flex items-center justify-center flex-shrink-0">
-                        <Logo className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="min-w-0 flex-1 overflow-hidden">
-                        <div className="text-sm font-medium text-foreground truncate">
-                          1Code
-                        </div>
-                      </div>
-                      <ChevronDown
-                        className={cn(
-                          "h-3 text-muted-foreground flex-shrink-0 overflow-hidden",
-                          isDropdownOpen
-                            ? "opacity-100 w-3"
-                            : "opacity-0 w-0 group-hover/team-button:opacity-100 group-hover/team-button:w-3",
-                        )}
-                      />
-                    </div>
-                  </ButtonCustom>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="w-52 pt-0"
-                  sideOffset={8}
-                >
-                  {userId ? (
-                    <>
-                      {/* Project section at the top */}
-                      <div className="relative rounded-t-xl border-b overflow-hidden">
-                        <div className="absolute inset-0 bg-popover brightness-110" />
-                        <div className="relative pl-2 pt-1.5 pb-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-8 h-8 rounded flex items-center justify-center bg-background flex-shrink-0 overflow-hidden">
-                              <Logo className="w-4 h-4" />
-                            </div>
-                            <div className="flex-1 min-w-0 overflow-hidden">
-                              <div className="font-medium text-sm text-foreground truncate">
-                                {desktopUser?.name || "User"}
-                              </div>
-                              <div className="text-xs text-muted-foreground truncate">
-                                {desktopUser?.email}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Settings */}
-                      <DropdownMenuItem
-                        className="gap-2"
-                        onSelect={() => {
-                          setIsDropdownOpen(false)
-                          setSettingsActiveTab("profile")
-                          setSettingsDialogOpen(true)
-                        }}
-                      >
-                        <SettingsIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        Settings
-                      </DropdownMenuItem>
-
-                      {/* Help Submenu */}
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger className="gap-2">
-                          <QuestionCircleIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                          <span className="flex-1">Help</span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent
-                          className="w-36"
-                          sideOffset={6}
-                          alignOffset={-4}
-                        >
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              window.open(
-                                "https://discord.gg/8ektTZGnj4",
-                                "_blank",
-                              )
-                              setIsDropdownOpen(false)
-                            }}
-                            className="gap-2"
-                          >
-                            <DiscordIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="flex-1">Discord</span>
-                          </DropdownMenuItem>
-                          {!isMobileFullscreen && (
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                setIsDropdownOpen(false)
-                                setShortcutsDialogOpen(true)
-                              }}
-                              className="gap-2"
-                            >
-                              <KeyboardIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="flex-1">Shortcuts</span>
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-
-                      <DropdownMenuSeparator />
-
-                      {/* Log out */}
-                      <div className="">
-                        <DropdownMenuItem
-                          className="gap-2"
-                          onSelect={() => onSignOut()}
-                        >
-                          <svg
-                            className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                          >
-                            <path
-                              d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <polyline
-                              points="16,17 21,12 16,7"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <line
-                              x1="21"
-                              y1="12"
-                              x2="9"
-                              y2="12"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                          Log out
-                        </DropdownMenuItem>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      {/* Login for unauthenticated users */}
-                      <div className="">
-                        <DropdownMenuItem
-                          className="gap-2"
-                          onSelect={() => {
-                            setIsDropdownOpen(false)
-                            setShowAuthDialog(true)
-                          }}
-                        >
-                          <ProfileIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                          Login
-                        </DropdownMenuItem>
-                      </div>
-
-                      <DropdownMenuSeparator />
-
-                      {/* Help Submenu */}
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger className="gap-2">
-                          <QuestionCircleIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                          <span className="flex-1">Help</span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent
-                          className="w-36"
-                          sideOffset={6}
-                          alignOffset={-4}
-                        >
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              window.open(
-                                "https://discord.gg/8ektTZGnj4",
-                                "_blank",
-                              )
-                              setIsDropdownOpen(false)
-                            }}
-                            className="gap-2"
-                          >
-                            <DiscordIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="flex-1">Discord</span>
-                          </DropdownMenuItem>
-                          {!isMobileFullscreen && (
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                setIsDropdownOpen(false)
-                                setShortcutsDialogOpen(true)
-                              }}
-                              className="gap-2"
-                            >
-                              <KeyboardIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="flex-1">Shortcuts</span>
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                <IconChatBubble className="w-4 h-4" />
+                <span>Chats</span>
+              </button>
+              <button
+                onClick={() => onNavViewModeChange?.("tasks")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
+                  navViewMode === "tasks"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <CheckIcon className="w-4 h-4" />
+                <span>Tasks</span>
+              </button>
             </div>
           </div>
+          {!isMobileFullscreen && (
+            <div className="transition-opacity duration-150 opacity-100">
+              <TooltipProvider>
+                <Tooltip delayDuration={500}>
+                  <TooltipTrigger asChild>
+                    <ButtonCustom
+                      variant="ghost"
+                      size="icon"
+                      onClick={onToggleSidebar}
+                      tabIndex={-1}
+                      className="h-8 w-8 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
+                      aria-label="Close sidebar"
+                    >
+                      <IconDoubleChevronLeft className="h-4 w-4" />
+                    </ButtonCustom>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Close sidebar
+                    <Kbd>⌘\</Kbd>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Search and New Workspace */}
-      <div className="px-2 pb-3 flex-shrink-0">
-        <div className="space-y-2">
-          {/* Search Input */}
-          <div className="relative">
-            <Input
-              ref={searchInputRef}
-              placeholder="Search workspaces..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault()
-                  searchInputRef.current?.blur()
-                  setFocusedChatIndex(-1) // Reset focus
-                  return
-                }
+      {/* Search and New Chat */}
+      <div className="px-2 pb-2 flex-shrink-0 space-y-2">
+        <div className="relative">
+          <Input
+            ref={searchInputRef}
+            placeholder="Search chats..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault()
+                searchInputRef.current?.blur()
+                setFocusedChatIndex(-1)
+                return
+              }
 
-                if (e.key === "ArrowDown") {
-                  e.preventDefault()
-                  setFocusedChatIndex((prev) => {
-                    // If no focus yet, start from first item
-                    if (prev === -1) return 0
-                    // Otherwise move down
-                    return prev < filteredChats.length - 1 ? prev + 1 : prev
-                  })
-                  return
-                }
+              if (e.key === "ArrowDown") {
+                e.preventDefault()
+                setFocusedChatIndex((prev) => {
+                  if (prev === -1) return 0
+                  return prev < filteredChats.length - 1 ? prev + 1 : prev
+                })
+                return
+              }
 
-                if (e.key === "ArrowUp") {
-                  e.preventDefault()
-                  setFocusedChatIndex((prev) => {
-                    // If no focus yet, start from last item
-                    if (prev === -1) return filteredChats.length - 1
-                    // Otherwise move up
-                    return prev > 0 ? prev - 1 : prev
-                  })
-                  return
-                }
+              if (e.key === "ArrowUp") {
+                e.preventDefault()
+                setFocusedChatIndex((prev) => {
+                  if (prev === -1) return filteredChats.length - 1
+                  return prev > 0 ? prev - 1 : prev
+                })
+                return
+              }
 
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  // Only open if something is focused (not -1)
-                  if (focusedChatIndex >= 0) {
-                    const focusedChat = filteredChats[focusedChatIndex]
-                    if (focusedChat) {
-                      handleChatClick(focusedChat.id)
-                      searchInputRef.current?.blur()
-                      setFocusedChatIndex(-1) // Reset focus after selection
-                    }
+              if (e.key === "Enter") {
+                e.preventDefault()
+                if (focusedChatIndex >= 0) {
+                  const focusedChat = filteredChats[focusedChatIndex]
+                  if (focusedChat) {
+                    handleChatClick(focusedChat.id)
+                    searchInputRef.current?.blur()
+                    setFocusedChatIndex(-1)
                   }
-                  return
                 }
-              }}
-              className={cn(
-                "w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40",
-                isMobileFullscreen ? "h-10" : "h-7",
-              )}
-            />
-          </div>
-          {/* New Workspace Button */}
-          <TooltipProvider>
-            <Tooltip delayDuration={500}>
-              <TooltipTrigger asChild>
-                <ButtonCustom
-                  onClick={handleNewAgent}
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    "px-2 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5",
-                    isMobileFullscreen ? "h-10" : "h-7",
-                  )}
-                >
-                  <span className="text-sm font-medium">New Workspace</span>
-                </ButtonCustom>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                Start a new workspace
-                <Kbd>{getShortcutKey("newAgent")}</Kbd>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                return
+              }
+            }}
+            className="w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40 h-9"
+          />
         </div>
+        <TooltipProvider>
+          <Tooltip delayDuration={500}>
+            <TooltipTrigger asChild>
+              <ButtonCustom
+                onClick={handleNewAgent}
+                variant="outline"
+                size="sm"
+                className="h-9 px-3 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5"
+              >
+                <span className="text-sm font-medium">New Chat</span>
+              </ButtonCustom>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              Start a new chat
+              <Kbd>{getShortcutKey("newAgent")}</Kbd>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       {/* Scrollable Agents List */}
@@ -1981,26 +1682,11 @@ export function AgentsSidebar({
           ) : null}
         </div>
 
-        {/* Top gradient fade (appears when scrolled down) */}
-        <div
-          className={cn(
-            "absolute top-0 left-0 right-0 h-10 pointer-events-none bg-gradient-to-b from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200",
-            showTopGradient ? "opacity-100" : "opacity-0",
-          )}
-        />
-
-        {/* Bottom gradient fade */}
-        <div
-          className={cn(
-            "absolute bottom-0 left-0 right-0 h-12 pointer-events-none bg-gradient-to-t from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200",
-            showBottomGradient ? "opacity-100" : "opacity-0",
-          )}
-        />
       </div>
 
-      {/* Footer - Multi-select toolbar or normal footer */}
+      {/* Footer - Multi-select toolbar only */}
       <AnimatePresence mode="wait">
-        {isMultiSelectMode ? (
+        {isMultiSelectMode && (
           <motion.div
             key="multi-select-footer"
             initial={hasFooterAnimated.current ? { opacity: 0, y: 8 } : false}
@@ -2040,108 +1726,6 @@ export function AgentsSidebar({
                   : "Archive"}
               </Button>
             </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="normal-footer"
-            initial={hasFooterAnimated.current ? { opacity: 0, y: 8 } : false}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            transition={{ duration: 0 }}
-            onAnimationComplete={() => {
-              hasFooterAnimated.current = true
-            }}
-            className="p-2 pt-2 flex flex-col gap-2"
-          >
-            <div className="flex items-center">
-              <div className="flex items-center gap-1">
-                {/* Settings Button */}
-                <Tooltip delayDuration={500}>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSettingsActiveTab("profile")
-                        setSettingsDialogOpen(true)
-                      }}
-                      className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-                    >
-                      <SettingsIcon className="h-4 w-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Settings</TooltipContent>
-                </Tooltip>
-
-                <Tooltip
-                  delayDuration={500}
-                  open={helpPopoverOpen || blockHelpTooltip ? false : undefined}
-                >
-                  <TooltipTrigger asChild>
-                    <div>
-                      <AgentsHelpPopover
-                        open={helpPopoverOpen}
-                        onOpenChange={setHelpPopoverOpen}
-                        isMobile={isMobileFullscreen}
-                      >
-                        <button
-                          ref={helpButtonRef}
-                          type="button"
-                          className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-                          suppressHydrationWarning
-                        >
-                          <QuestionCircleIcon className="h-4 w-4" />
-                        </button>
-                      </AgentsHelpPopover>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>Help</TooltipContent>
-                </Tooltip>
-
-                {/* Archive Button - shown only if there are archived chats */}
-                {archivedChatsCount > 0 && (
-                  <Tooltip
-                    delayDuration={500}
-                    open={
-                      archivePopoverOpen || blockArchiveTooltip
-                        ? false
-                        : undefined
-                    }
-                  >
-                    <TooltipTrigger asChild>
-                      <div>
-                        <ArchivePopover
-                          trigger={
-                            <button
-                              ref={archiveButtonRef}
-                              type="button"
-                              className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-                            >
-                              <ArchiveIcon className="h-4 w-4" />
-                            </button>
-                          }
-                        />
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>Archive</TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-
-              <div className="flex-1" />
-            </div>
-
-            {/* Feedback Button */}
-            <ButtonCustom
-              onClick={() => window.open(FEEDBACK_URL, "_blank")}
-              variant="outline"
-              size="sm"
-              className={cn(
-                "px-2 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5",
-                isMobileFullscreen ? "h-10" : "h-7",
-              )}
-            >
-              <span className="text-sm font-medium">Feedback</span>
-            </ButtonCustom>
           </motion.div>
         )}
       </AnimatePresence>

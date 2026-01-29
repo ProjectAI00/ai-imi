@@ -470,4 +470,181 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     },
     variant: "collapsible",
   },
+
+  // Copilot/Agent tools
+  "tool-ReportIntent": {
+    icon: SparklesIcon,
+    title: () => "Planning",
+    subtitle: (part) => {
+      const intent = part.input?.intent || ""
+      return intent.length > 40 ? intent.slice(0, 37) + "..." : intent
+    },
+    variant: "simple",
+  },
+
+  "tool-StoreMemory": {
+    icon: Database,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Storing memory" : "Stored memory"
+    },
+    subtitle: (part) => {
+      const subject = part.input?.subject || ""
+      return subject.length > 30 ? subject.slice(0, 27) + "..." : subject
+    },
+    variant: "simple",
+  },
+
+  // GitHub MCP tools
+  "tool-GitHistory": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting commits" : "Got commits"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  "tool-GitCommit": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting commit" : "Got commit"
+    },
+    subtitle: (part) => {
+      const sha = part.input?.sha || ""
+      return sha.slice(0, 7)
+    },
+    variant: "simple",
+  },
+
+  "tool-GitBranches": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Listing branches" : "Listed branches"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  "tool-GitPRList": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Listing PRs" : "Listed PRs"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  "tool-GitPR": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting PR" : "Got PR"
+    },
+    subtitle: (part) => {
+      const pullNumber = part.input?.pullNumber
+      return pullNumber ? `#${pullNumber}` : ""
+    },
+    variant: "simple",
+  },
+
+  "tool-GitIssues": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Searching issues" : "Found issues"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  "tool-GitIssue": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting issue" : "Got issue"
+    },
+    subtitle: (part) => {
+      const issueNumber = part.input?.issue_number
+      return issueNumber ? `#${issueNumber}` : ""
+    },
+    variant: "simple",
+  },
+
+  "tool-GitActions": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Listing actions" : "Listed actions"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  "tool-GitAction": {
+    icon: GitBranch,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting action" : "Got action"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  "tool-GitLogs": {
+    icon: Terminal,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting logs" : "Got logs"
+    },
+    subtitle: () => "",
+    variant: "simple",
+  },
+
+  // IMI Custom Tools (Plan Mode)
+  "tool-ImiCreateGoal": {
+    icon: ListTodo,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      if (isPending) return "Creating goal"
+      const name = part.output?.goalId ? "Goal created" : "Creating goal"
+      return name
+    },
+    subtitle: (part) => {
+      const name = part.input?.name || ""
+      return name.length > 30 ? name.slice(0, 27) + "..." : name
+    },
+    variant: "simple",
+  },
+
+  "tool-ImiCreateTask": {
+    icon: ListTodo,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      if (isPending) return "Creating task"
+      return part.output?.taskId ? "Task created" : "Creating task"
+    },
+    subtitle: (part) => {
+      const title = part.input?.title || ""
+      return title.length > 30 ? title.slice(0, 27) + "..." : title
+    },
+    variant: "simple",
+  },
 }

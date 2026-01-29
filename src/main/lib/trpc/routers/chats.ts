@@ -114,14 +114,27 @@ export const chatsRouter = router({
                   base64Data: z.string().optional(),
                 }),
               }),
+              z.object({
+                type: z.literal("data-file"),
+                data: z.object({
+                  url: z.string(),
+                  mediaType: z.string().optional(),
+                  filename: z.string().optional(),
+                  size: z.number().optional(),
+                  path: z.string().optional(),
+                }),
+              }),
             ]),
           )
           .optional(),
         baseBranch: z.string().optional(), // Branch to base the worktree off
         useWorktree: z.boolean().default(true), // If false, work directly in project dir
         mode: z.enum(["plan", "agent"]).default("agent"),
-        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid"]).default("claude-code"),
+        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid", "copilot"]).default("claude-code"),
         model: z.string().optional(),
+        // State engine: link to goal/task for context injection
+        goalId: z.string().optional(),
+        taskId: z.string().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -175,6 +188,8 @@ export const chatsRouter = router({
           cli: input.cli,
           model: input.model,
           messages: initialMessages,
+          goalId: input.goalId,
+          taskId: input.taskId,
         })
         .returning()
         .get()
@@ -394,7 +409,10 @@ export const chatsRouter = router({
         chatId: z.string(),
         name: z.string().optional(),
         mode: z.enum(["plan", "agent"]).default("agent"),
-        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid"]).default("claude-code"),
+        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid", "copilot"]).default("claude-code"),
+        model: z.string().optional(),
+        goalId: z.string().optional(),
+        taskId: z.string().optional(),
       }),
     )
     .mutation(({ input }) => {
@@ -406,6 +424,9 @@ export const chatsRouter = router({
           name: input.name,
           mode: input.mode,
           cli: input.cli,
+          model: input.model,
+          goalId: input.goalId,
+          taskId: input.taskId,
           messages: "[]",
         })
         .returning()
@@ -452,6 +473,27 @@ export const chatsRouter = router({
       return db
         .update(subChats)
         .set({ mode: input.mode })
+        .where(eq(subChats.id, input.id))
+        .returning()
+        .get()
+    }),
+
+  /**
+   * Update sub-chat CLI/model
+   */
+  updateSubChatConfig: publicProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid", "copilot"]),
+        model: z.string().optional(),
+      }),
+    )
+    .mutation(({ input }) => {
+      const db = getDatabase()
+      return db
+        .update(subChats)
+        .set({ cli: input.cli, model: input.model })
         .where(eq(subChats.id, input.id))
         .returning()
         .get()

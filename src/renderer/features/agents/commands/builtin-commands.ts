@@ -6,14 +6,8 @@ import type { BuiltinCommandAction, SlashCommandOption } from "./types"
 export const COMMAND_PROMPTS: Partial<
   Record<BuiltinCommandAction["type"], string>
 > = {
-  review:
-    "Please review the code in the current context and provide feedback on code quality, potential bugs, and improvements.",
-  "pr-comments":
-    "Generate detailed PR review comments for the changes in the current context.",
-  "release-notes":
-    "Generate release notes summarizing the changes in this codebase.",
-  "security-review":
-    "Perform a security audit of the code in the current context. Identify vulnerabilities, security risks, and suggest fixes.",
+  goals: "Show me my current goals and their status.",
+  tasks: "Show me the tasks for the current goal.",
 }
 
 /**
@@ -21,7 +15,7 @@ export const COMMAND_PROMPTS: Partial<
  */
 export function isPromptCommand(
   type: BuiltinCommandAction["type"],
-): type is "review" | "pr-comments" | "release-notes" | "security-review" {
+): type is "goals" | "tasks" {
   return type in COMMAND_PROMPTS
 }
 
@@ -40,43 +34,45 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
     id: "builtin:plan",
     name: "plan",
     command: "/plan",
-    description: "Switch to Plan mode (creates plan before making changes)",
+    description: "Switch to Plan mode (create goals and tasks)",
     category: "builtin",
   },
   {
     id: "builtin:agent",
     name: "agent",
     command: "/agent",
-    description: "Switch to Agent mode (applies changes directly)",
+    description: "Switch to Agent mode (execute work)",
     category: "builtin",
   },
-  // Prompt-based commands
+  // Goal/task commands
   {
-    id: "builtin:review",
-    name: "review",
-    command: "/review",
-    description: "Ask agent to review your code",
+    id: "builtin:goal",
+    name: "goal",
+    command: "/goal",
+    description: "Work on a goal (loads context from task board)",
+    category: "builtin",
+    requiresPicker: "goal",
+  },
+  {
+    id: "builtin:task",
+    name: "task",
+    command: "/task",
+    description: "Work on a specific task (loads context from task board)",
+    category: "builtin",
+    requiresPicker: "task",
+  },
+  {
+    id: "builtin:goals",
+    name: "goals",
+    command: "/goals",
+    description: "List all goals and their status",
     category: "builtin",
   },
   {
-    id: "builtin:pr-comments",
-    name: "pr-comments",
-    command: "/pr-comments",
-    description: "Ask agent to generate PR review comments",
-    category: "builtin",
-  },
-  {
-    id: "builtin:release-notes",
-    name: "release-notes",
-    command: "/release-notes",
-    description: "Ask agent to generate release notes",
-    category: "builtin",
-  },
-  {
-    id: "builtin:security-review",
-    name: "security-review",
-    command: "/security-review",
-    description: "Ask agent to perform a security audit",
+    id: "builtin:tasks",
+    name: "tasks",
+    command: "/tasks",
+    description: "List tasks for the current goal",
     category: "builtin",
   },
 ]

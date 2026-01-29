@@ -20,6 +20,7 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
   const { questions, toolUseId } = pendingQuestions
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string[]>>({})
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({})
   const [focusedOptionIndex, setFocusedOptionIndex] = useState(0)
   const [isVisible, setIsVisible] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -32,6 +33,7 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
       setIsSubmitting(false)
       setCurrentQuestionIndex(0)
       setAnswers({})
+      setCustomAnswers({})
       setFocusedOptionIndex(0)
       prevToolUseIdRef.current = toolUseId
     }
@@ -114,6 +116,23 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
       setFocusedOptionIndex(0)
     }
   }
+
+  const handleCustomInputChange = useCallback(
+    (questionText: string, value: string) => {
+      setCustomAnswers((prev) => ({ ...prev, [questionText]: value }))
+      setAnswers((prev) => {
+        const next = { ...prev }
+        const trimmed = value.trim()
+        if (trimmed) {
+          next[questionText] = [trimmed]
+        } else {
+          delete next[questionText]
+        }
+        return next
+      })
+    },
+    [],
+  )
 
   const handleContinue = useCallback(() => {
     if (isSubmitting) return
@@ -343,6 +362,26 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
               </button>
             )
           })}
+        </div>
+
+        {/* Custom freeform answer */}
+        <div className="mt-3 px-2">
+          <label className="text-[12px] text-muted-foreground block mb-1">
+            Or type your own answer
+          </label>
+          <input
+            value={customAnswers[currentQuestion.question] || ""}
+            onChange={(e) =>
+              handleCustomInputChange(currentQuestion.question, e.target.value)
+            }
+            disabled={isSubmitting}
+            className={cn(
+              "w-full rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground outline-none",
+              "focus:ring-2 focus:ring-ring/70",
+              isSubmitting && "opacity-50 cursor-not-allowed",
+            )}
+            placeholder="Enter a custom answer"
+          />
         </div>
       </div>
 

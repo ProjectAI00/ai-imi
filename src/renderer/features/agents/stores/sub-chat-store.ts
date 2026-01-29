@@ -6,6 +6,10 @@ export interface SubChatMeta {
   created_at?: string
   updated_at?: string
   mode?: "plan" | "agent"
+  cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
+  model?: string
+  goalId?: string | null
+  taskId?: string | null
 }
 
 interface AgentSubChatStore {
@@ -29,6 +33,11 @@ interface AgentSubChatStore {
   addToAllSubChats: (subChat: SubChatMeta) => void
   updateSubChatName: (subChatId: string, name: string) => void
   updateSubChatMode: (subChatId: string, mode: "plan" | "agent") => void
+  updateSubChatCli: (
+    subChatId: string,
+    cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot",
+  ) => void
+  updateSubChatModel: (subChatId: string, model: string | undefined) => void
   updateSubChatTimestamp: (subChatId: string) => void
   reset: () => void
 }
@@ -156,6 +165,26 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
       allSubChats: allSubChats.map((sc) =>
         sc.id === subChatId
           ? { ...sc, mode }
+          : sc,
+      ),
+    })
+  },
+  updateSubChatCli: (subChatId, cli) => {
+    const { allSubChats } = get()
+    set({
+      allSubChats: allSubChats.map((sc) =>
+        sc.id === subChatId
+          ? { ...sc, cli }
+          : sc,
+      ),
+    })
+  },
+  updateSubChatModel: (subChatId, model) => {
+    const { allSubChats } = get()
+    set({
+      allSubChats: allSubChats.map((sc) =>
+        sc.id === subChatId
+          ? { ...sc, model }
           : sc,
       ),
     })
