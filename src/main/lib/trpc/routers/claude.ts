@@ -436,6 +436,8 @@ export const claudeRouter = router({
               const textId = `cli-text-${Date.now()}`
               let currentSessionId: string | undefined
               let firstChunkEmitted = false
+              let firstTextStartLogged = false
+              let firstTextDeltaLogged = false
 
               subscription.subscribe({
                 next: (chunk) => {
@@ -449,14 +451,54 @@ export const claudeRouter = router({
                   if (chunk.type === "session-id" && chunk.sessionId) {
                     console.log(`[CLI] Saving session ID for resume: ${chunk.sessionId}`)
                     currentSessionId = chunk.sessionId
+                    const dbStart = Date.now()
                     db.update(subChats)
                       .set({ sessionId: chunk.sessionId, updatedAt: new Date() })
                       .where(eq(subChats.id, input.subChatId))
                       .run()
+                    // #region agent log
+                    fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        sessionId: "debug-session",
+                        runId: "pre-fix",
+                        hypothesisId: "H3",
+                        location: "claude.ts:session-id-save",
+                        message: "DB update for session-id",
+                        data: {
+                          subChatId: input.subChatId,
+                          durationMs: Date.now() - dbStart,
+                        },
+                        timestamp: Date.now(),
+                      }),
+                    }).catch(() => {})
+                    // #endregion
                   }
                   // Accumulate text from text-delta chunks (not "text")
                   if (chunk.type === "text-delta" && chunk.delta) {
                     assistantText += chunk.delta
+                    if (!firstTextDeltaLogged) {
+                      firstTextDeltaLogged = true
+                      // #region agent log
+                      fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          sessionId: "debug-session",
+                          runId: "pre-fix",
+                          hypothesisId: "H7",
+                          location: "claude.ts:adapter-next",
+                          message: "First text-delta received",
+                          data: {
+                            subChatId: input.subChatId,
+                            elapsedMs: Number(elapsed().replace("ms", "")),
+                          },
+                          timestamp: Date.now(),
+                        }),
+                      }).catch(() => {})
+                      // #endregion
+                    }
                   }
                   // Capture tool calls for persistence
                   if (chunk.type === "tool-input-available") {
@@ -488,6 +530,27 @@ export const claudeRouter = router({
                       if (!textStartEmitted) {
                         emit.next({ type: "text-start", id: textId })
                         textStartEmitted = true
+                        if (!firstTextStartLogged) {
+                          firstTextStartLogged = true
+                          // #region agent log
+                          fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              sessionId: "debug-session",
+                              runId: "pre-fix",
+                              hypothesisId: "H7",
+                              location: "claude.ts:adapter-next",
+                              message: "Text-start emitted (error path)",
+                              data: {
+                                subChatId: input.subChatId,
+                                elapsedMs: Number(elapsed().replace("ms", "")),
+                              },
+                              timestamp: Date.now(),
+                            }),
+                          }).catch(() => {})
+                          // #endregion
+                        }
                       }
                       emit.next({
                         type: "text-delta",
@@ -498,6 +561,27 @@ export const claudeRouter = router({
                     // Log chunk forwarding (not every text-delta to avoid spam)
                     if (chunk.type !== "text-delta" || Math.random() < 0.1) {
                       console.log(`[SD] M:FWD_CHUNK sub=${subId} type=${chunk.type} t=${elapsed()}`)
+                    }
+                    if (chunk.type === "text-start" && !firstTextStartLogged) {
+                      firstTextStartLogged = true
+                      // #region agent log
+                      fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          sessionId: "debug-session",
+                          runId: "pre-fix",
+                          hypothesisId: "H7",
+                          location: "claude.ts:adapter-next",
+                          message: "Text-start received",
+                          data: {
+                            subChatId: input.subChatId,
+                            elapsedMs: Number(elapsed().replace("ms", "")),
+                          },
+                          timestamp: Date.now(),
+                        }),
+                      }).catch(() => {})
+                      // #endregion
                     }
                     emit.next(chunk)
                 },

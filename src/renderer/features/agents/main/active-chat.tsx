@@ -184,6 +184,8 @@ const EXPLORING_TOOLS = new Set([
   "tool-WebFetch",
 ])
 
+const DEFAULT_VISIBLE_MESSAGE_GROUPS = 30
+
 // Group consecutive exploring tools into exploring-group
 function groupExploringTools(parts: any[], nestedToolIds: Set<string>): any[] {
   const result: any[] = []
@@ -1697,6 +1699,26 @@ function ChatViewInner({
     if (prevStatusRef.current !== status) {
       const subId = subChatId.slice(-8)
       console.log(`[SD] C:STATUS sub=${subId} ${prevStatusRef.current} → ${status} msgs=${messages.length}`)
+      // #region agent log
+      fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "debug-session",
+          runId: "pre-fix",
+          hypothesisId: "H5",
+          location: "active-chat.tsx:status-change",
+          message: "Chat status changed",
+          data: {
+            subChatId,
+            from: prevStatusRef.current,
+            to: status,
+            messagesLength: messages.length,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {})
+      // #endregion
       prevStatusRef.current = status
     }
   }, [status, subChatId, messages.length])
@@ -2511,6 +2533,23 @@ function ChatViewInner({
     return groups
   }, [messages, optimisticUserMessage])
 
+  const [visibleGroupCount, setVisibleGroupCount] = useState(
+    DEFAULT_VISIBLE_MESSAGE_GROUPS,
+  )
+
+  useEffect(() => {
+    setVisibleGroupCount(DEFAULT_VISIBLE_MESSAGE_GROUPS)
+  }, [subChatId])
+
+  const hiddenGroupCount = Math.max(
+    0,
+    messageGroups.length - visibleGroupCount,
+  )
+  const visibleMessageGroups =
+    hiddenGroupCount > 0
+      ? messageGroups.slice(hiddenGroupCount)
+      : messageGroups
+
   return (
     <>
       {/* Chat title removed - shown in header already */}
@@ -2535,10 +2574,23 @@ function ChatViewInner({
           )}
         >
           <div>
+            {hiddenGroupCount > 0 && (
+              <div className="flex justify-center py-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setVisibleGroupCount(messageGroups.length)}
+                  className="text-xs text-muted-foreground"
+                >
+                  Show {hiddenGroupCount} older messages
+                </Button>
+              </div>
+            )}
             {/* Render message groups - each group has user message sticky within it */}
-            {messageGroups.map((group, groupIndex) => {
+            {visibleMessageGroups.map((group, groupIndex) => {
               const msg = group.userMsg
-              const isLastUserMessage = groupIndex === messageGroups.length - 1
+              const isLastUserMessage =
+                groupIndex === visibleMessageGroups.length - 1
 
               // User message data
               const textContent = msg.parts
@@ -3389,7 +3441,7 @@ export function ChatView({
   // Initialize to Date.now() to prevent double-fetch on mount
   // (the "mount" effect already fetches, throttle should wait)
   const lastDiffFetchTimeRef = useRef<number>(Date.now())
-  const DIFF_THROTTLE_MS = 2000 // Max 1 fetch per 2 seconds
+  const DIFF_THROTTLE_MS = 10000 // Max 1 fetch per 10 seconds
 
   // Clear "unseen changes" when chat is opened
   useEffect(() => {
@@ -3709,10 +3761,12 @@ export function ChatView({
 
   const shouldAutoFetchDiff = false
 
-  // Fetch diff stats on mount and when worktreePath/sandboxId changes
+  // Fetch diff stats when sidebar is opened (lazy loading)
   useEffect(() => {
-    fetchDiffStats()
-  }, [fetchDiffStats])
+    if (isDiffSidebarOpen && diffStats.isLoading) {
+      fetchDiffStats()
+    }
+  }, [isDiffSidebarOpen, diffStats.isLoading, fetchDiffStats])
 
   // Calculate total file count across all sub-chats for change detection
   const totalSubChatFileCount = useMemo(() => {

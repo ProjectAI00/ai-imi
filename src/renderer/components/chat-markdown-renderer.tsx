@@ -128,9 +128,50 @@ function CodeBlock({
 
     const highlight = async () => {
       try {
+        const highlightStart = performance.now()
+        // #region agent log
+        fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "debug-session",
+            runId: "pre-fix",
+            hypothesisId: "H1",
+            location: "chat-markdown-renderer.tsx:CodeBlock",
+            message: "Highlight start",
+            data: {
+              language,
+              themeId,
+              contentLength: children.length,
+              shouldHighlight,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {})
+        // #endregion
         const html = await highlightCode(children, language, themeId)
         if (!cancelled) {
           setHighlightedHtml(html)
+          // #region agent log
+          fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId: "pre-fix",
+              hypothesisId: "H1",
+              location: "chat-markdown-renderer.tsx:CodeBlock",
+              message: "Highlight complete",
+              data: {
+                language,
+                themeId,
+                durationMs: Number((performance.now() - highlightStart).toFixed(0)),
+                contentLength: children.length,
+              },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {})
+          // #endregion
         }
       } catch (error) {
         console.error("Failed to highlight code:", error)

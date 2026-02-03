@@ -251,6 +251,30 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     let streamErrored = false  // Track if stream has errored to skip further enqueues
     const streamStartTime = performance.now()
     console.log(`[SD] R:START sub=${subId} cli=${currentCli} t=0ms`)
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H2",
+        location: "ipc-chat-transport.ts:sendMessages",
+        message: "IPC stream start",
+        data: {
+          subChatId: this.config.subChatId,
+          chatId: this.config.chatId,
+          cli: currentCli,
+          mode: currentMode,
+          promptLength: prompt.length,
+          imagesCount: images.length,
+          filesCount: files.length,
+          hasModel: !!modelString,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {})
+    // #endregion
 
     return new ReadableStream({
       start: (controller) => {
@@ -298,6 +322,36 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           }
         }
 
+        const scheduleFlush =
+          typeof requestAnimationFrame === "function"
+            ? requestAnimationFrame
+            : (cb: FrameRequestCallback) => queueMicrotask(cb)
+        let flushScheduled = false
+        let pendingTextDeltaId: string | null = null
+        let pendingTextDelta = ""
+        const flushPendingTextDelta = () => {
+          if (!pendingTextDeltaId || streamErrored) return
+          try {
+            controller.enqueue({
+              type: "text-delta",
+              id: pendingTextDeltaId,
+              delta: pendingTextDelta,
+            })
+          } catch {
+            // Ignore enqueue errors for pending flush
+          }
+          pendingTextDeltaId = null
+          pendingTextDelta = ""
+        }
+        const schedulePendingFlush = () => {
+          if (flushScheduled || streamErrored) return
+          flushScheduled = true
+          scheduleFlush(() => {
+            flushScheduled = false
+            flushPendingTextDelta()
+          })
+        }
+
         console.log(`[SD] R:SUB_CREATING sub=${subId} t=${elapsed()}`)
         const sub = trpcClient.claude.chat.subscribe(
           {
@@ -323,6 +377,25 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               // Log first chunk timing to trace latency
               if (chunkCount === 1) {
                 console.log(`[SD] R:FIRST_CHUNK sub=${subId} type=${chunk.type} t=${elapsed()}`)
+                // #region agent log
+                fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    sessionId: "debug-session",
+                    runId: "pre-fix",
+                    hypothesisId: "H2",
+                    location: "ipc-chat-transport.ts:onData",
+                    message: "First chunk received",
+                    data: {
+                      subChatId: this.config.subChatId,
+                      chunkType: chunk.type,
+                      elapsedMs: Number((performance.now() - streamStartTime).toFixed(0)),
+                    },
+                    timestamp: Date.now(),
+                  }),
+                }).catch(() => {})
+                // #endregion
               }
 
               // Update streaming activity label from tool calls
@@ -458,11 +531,46 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 return
               }
 
+              if (chunk.type !== "text-delta") {
+                flushPendingTextDelta()
+              }
+
               // Try to enqueue, but don't crash if stream is already closed
               try {
                 // Log all chunk types for debugging
                 if (chunk.type === "text-start" || chunk.type === "text-delta" || chunk.type === "text-end") {
                   console.log(`[SD] R:ENQ sub=${subId} type=${chunk.type} n=${chunkCount} t=${elapsed()}`)
+                  if (chunk.type === "text-start") {
+                    // #region agent log
+                    fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        sessionId: "debug-session",
+                        runId: "pre-fix",
+                        hypothesisId: "H2",
+                        location: "ipc-chat-transport.ts:onData",
+                        message: "Text start enqueued",
+                        data: {
+                          subChatId: this.config.subChatId,
+                          chunkCount,
+                          elapsedMs: Number((performance.now() - streamStartTime).toFixed(0)),
+                        },
+                        timestamp: Date.now(),
+                      }),
+                    }).catch(() => {})
+                    // #endregion
+                  }
+                }
+                if (chunk.type === "text-delta") {
+                  const delta = chunk.delta || ""
+                  if (pendingTextDeltaId && pendingTextDeltaId !== chunk.id) {
+                    flushPendingTextDelta()
+                  }
+                  pendingTextDeltaId = chunk.id
+                  pendingTextDelta += delta
+                  schedulePendingFlush()
+                  return
                 }
                 controller.enqueue(chunk)
               } catch (e) {
@@ -472,6 +580,25 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               if (chunk.type === "finish") {
                 console.log(`[SD] R:FINISH sub=${subId} n=${chunkCount} t=${elapsed()}`)
+                // #region agent log
+                fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    sessionId: "debug-session",
+                    runId: "pre-fix",
+                    hypothesisId: "H2",
+                    location: "ipc-chat-transport.ts:onData",
+                    message: "Finish received",
+                    data: {
+                      subChatId: this.config.subChatId,
+                      chunkCount,
+                      elapsedMs: Number((performance.now() - streamStartTime).toFixed(0)),
+                    },
+                    timestamp: Date.now(),
+                  }),
+                }).catch(() => {})
+                // #endregion
                 setActivity(null)
                 try {
                   controller.close()

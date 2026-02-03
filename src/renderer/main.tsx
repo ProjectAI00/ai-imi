@@ -10,6 +10,21 @@ import { App } from "./App"
 import "./styles/globals.css"
 
 console.log("[main.tsx] Script starting...")
+// #region agent log
+fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    sessionId: "debug-session",
+    runId: "pre-fix",
+    hypothesisId: "H0",
+    location: "main.tsx:startup",
+    message: "Renderer script start",
+    data: {},
+    timestamp: Date.now(),
+  }),
+}).catch(() => {})
+// #endregion
 
 // Skip diff highlighter preload to avoid main-thread cost during startup.
 
@@ -41,6 +56,21 @@ window.onerror = (message, source, lineno, colno, error) => {
 
 const rootElement = document.getElementById("root")
 console.log("[main.tsx] Root element found:", !!rootElement)
+// #region agent log
+fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    sessionId: "debug-session",
+    runId: "pre-fix",
+    hypothesisId: "H0",
+    location: "main.tsx:root-element",
+    message: "Renderer root element",
+    data: { found: !!rootElement },
+    timestamp: Date.now(),
+  }),
+}).catch(() => {})
+// #endregion
 
 if (rootElement) {
   console.log("[main.tsx] Creating React root...")
@@ -49,6 +79,51 @@ if (rootElement) {
     console.log("[main.tsx] Rendering App...")
     root.render(<App />)
     console.log("[main.tsx] App rendered!")
+    // #region agent log
+    try {
+      const longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration < 50) continue
+          fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId: "pre-fix",
+              hypothesisId: "H6",
+              location: "main.tsx:longtask",
+              message: "Renderer long task",
+              data: {
+                name: entry.name,
+                durationMs: Math.round(entry.duration),
+                startTimeMs: Math.round(entry.startTime),
+                entryType: entry.entryType,
+              },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {})
+        }
+      })
+      longTaskObserver.observe({ entryTypes: ["longtask"] })
+    } catch {
+      // Ignore if PerformanceObserver or longtask entries are unsupported
+    }
+    // #endregion
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H0",
+        location: "main.tsx:render",
+        message: "Renderer app rendered",
+        data: {},
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {})
+    // #endregion
   } catch (error) {
     console.error("[main.tsx] Failed to render App:", error)
     // Show error in DOM

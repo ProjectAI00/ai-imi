@@ -67,13 +67,54 @@ const THEME_TO_SHIKI_MAP: Record<string, shiki.BundledTheme> = {
  * Get or create the Shiki highlighter instance
  */
 export async function getHighlighter(): Promise<shiki.Highlighter> {
+  const initStart = performance.now()
+  const isInit = !highlighterPromise
   if (!highlighterPromise) {
     highlighterPromise = shiki.createHighlighter({
       themes: DEFAULT_THEMES,
       langs: SUPPORTED_LANGUAGES,
     })
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H4",
+        location: "shiki-theme-loader.ts:getHighlighter",
+        message: "Highlighter init start",
+        data: {
+          themesCount: DEFAULT_THEMES.length,
+          langsCount: SUPPORTED_LANGUAGES.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {})
+    // #endregion
   }
-  return highlighterPromise
+  const highlighter = await highlighterPromise
+  if (isInit) {
+    // #region agent log
+    fetch("http://127.0.0.1:7242/ingest/83cfda58-76b2-4ee9-ad45-47baf28861df", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H4",
+        location: "shiki-theme-loader.ts:getHighlighter",
+        message: "Highlighter init complete",
+        data: {
+          durationMs: Number((performance.now() - initStart).toFixed(0)),
+          loadedLangsCount: highlighter.getLoadedLanguages().length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {})
+    // #endregion
+  }
+  return highlighter
 }
 
 // Cache for full themes (from the new full theme system)
