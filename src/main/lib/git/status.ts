@@ -20,7 +20,6 @@ export const createStatusRouter = () => {
 				}),
 			)
 			.query(async ({ input }): Promise<GitChangesStatus> => {
-				console.log("[getStatus] Called with worktreePath:", input.worktreePath);
 				assertRegisteredWorktree(input.worktreePath);
 
 				const git = simpleGit(input.worktreePath);
@@ -42,7 +41,7 @@ export const createStatusRouter = () => {
 
 				await applyUntrackedLineCount(input.worktreePath, parsed.untracked);
 
-				const result = {
+				return {
 					branch: parsed.branch,
 					defaultBranch,
 					againstBase: branchComparison.againstBase,
@@ -56,14 +55,6 @@ export const createStatusRouter = () => {
 					pullCount: trackingStatus.pullCount,
 					hasUpstream: trackingStatus.hasUpstream,
 				};
-				console.log("[getStatus] Returning:", {
-					branch: result.branch,
-					stagedCount: result.staged.length,
-					unstagedCount: result.unstaged.length,
-					untrackedCount: result.untracked.length,
-					commitsCount: result.commits.length,
-				});
-				return result;
 			}),
 
 		getCommitFiles: publicProcedure
@@ -160,18 +151,15 @@ async function applyUntrackedLineCount(
 	worktreePath: string,
 	untracked: ChangedFile[],
 ): Promise<void> {
-	for (const file of untracked) {
+	// Limit to 5 files max to avoid performance issues
+	for (const file of untracked.slice(0, 5)) {
 		try {
 			const stats = await secureFs.stat(worktreePath, file.path);
 			if (stats.size > MAX_LINE_COUNT_SIZE) continue;
-
 			const content = await secureFs.readFile(worktreePath, file.path);
-			const lineCount = content.split("\n").length;
-			file.additions = lineCount;
+			file.additions = content.split("\n").length;
 			file.deletions = 0;
-		} catch {
-			// Skip files that fail validation or reading
-		}
+		} catch {}
 	}
 }
 

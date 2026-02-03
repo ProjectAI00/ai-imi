@@ -57,15 +57,8 @@ export function ChangesView({
 		refetch,
 	} = trpc.changes.getStatus.useQuery(
 		{ worktreePath: worktreePath || "", defaultBranch: effectiveBaseBranch },
-		{
-			enabled: !!worktreePath,
-			refetchInterval: 2500,
-			refetchOnWindowFocus: true,
-		},
+		{ enabled: !!worktreePath, refetchInterval: 30000, staleTime: 10000 },
 	);
-
-	// Debug: Log status data
-	console.log("[ChangesView] status:", status, "isLoading:", isLoading, "statusError:", statusError);
 
 	const { pr, refetch: refetchPRStatus } = usePRStatus({
 		worktreePath,

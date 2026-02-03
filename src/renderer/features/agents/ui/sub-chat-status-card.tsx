@@ -63,11 +63,7 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
   // Fetch git status to filter out committed files
   const { data: gitStatus } = trpc.changes.getStatus.useQuery(
     { worktreePath: worktreePath || "", defaultBranch: "main" },
-    {
-      enabled: !!worktreePath && changedFiles.length > 0 && !isStreaming,
-      refetchInterval: 3000,
-      staleTime: 1000,
-    },
+    { enabled: !!worktreePath && changedFiles.length > 0 && !isStreaming, staleTime: 10000 },
   )
 
   // Filter changedFiles to only include files that are still uncommitted
