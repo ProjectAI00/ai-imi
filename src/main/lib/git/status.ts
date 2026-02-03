@@ -10,8 +10,40 @@ import {
 	parseNameStatus,
 } from "./utils/parse-status";
 
+/** Lightweight status response - just file counts, no line stats */
+interface QuickStatus {
+	branch: string;
+	stagedCount: number;
+	unstagedCount: number;
+	untrackedCount: number;
+	hasChanges: boolean;
+}
+
 export const createStatusRouter = () => {
 	return router({
+		/**
+		 * LIGHTWEIGHT: Quick status check - 1 git command only
+		 * Use for polling/badge updates. Returns counts, not file details.
+		 */
+		getQuickStatus: publicProcedure
+			.input(z.object({ worktreePath: z.string() }))
+			.query(async ({ input }): Promise<QuickStatus> => {
+				assertRegisteredWorktree(input.worktreePath);
+				const git = simpleGit(input.worktreePath);
+				const status = await git.status();
+				return {
+					branch: status.current || "unknown",
+					stagedCount: status.staged.length,
+					unstagedCount: status.modified.length + status.deleted.length,
+					untrackedCount: status.not_added.length,
+					hasChanges: !status.isClean(),
+				};
+			}),
+
+		/**
+		 * FULL: Complete status with file details and line stats
+		 * Use only when user opens Changes panel. 7+ git commands.
+		 */
 		getStatus: publicProcedure
 			.input(
 				z.object({
@@ -28,17 +60,15 @@ export const createStatusRouter = () => {
 				const status = await git.status();
 				const parsed = parseGitStatus(status);
 
-				const branchComparison = await getBranchComparison(git, defaultBranch);
-				const trackingStatus = await getTrackingBranchStatus(git);
-
-				await applyNumstatToFiles(git, parsed.staged, [
-					"diff",
-					"--cached",
-					"--numstat",
+				// Run expensive operations in parallel where possible
+				const [branchComparison, trackingStatus] = await Promise.all([
+					getBranchComparison(git, defaultBranch),
+					getTrackingBranchStatus(git),
 				]);
 
+				// These must be sequential (modify parsed arrays)
+				await applyNumstatToFiles(git, parsed.staged, ["diff", "--cached", "--numstat"]);
 				await applyNumstatToFiles(git, parsed.unstaged, ["diff", "--numstat"]);
-
 				await applyUntrackedLineCount(input.worktreePath, parsed.untracked);
 
 				return {
