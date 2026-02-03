@@ -60,7 +60,7 @@ import {
   ContextMenuTrigger,
 } from "../../components/ui/context-menu"
 import {
-  IconDoubleChevronLeft,
+  IconSidebarToggle,
   SettingsIcon,
   PlusIcon,
   ProfileIcon,
@@ -73,7 +73,6 @@ import {
   QuestionCircleIcon,
   KeyboardIcon,
   TicketIcon,
-  IconChatBubble,
   CheckIcon,
 } from "../../components/ui/icons"
 import { Logo } from "../../components/ui/logo"
@@ -206,6 +205,9 @@ interface AgentsSidebarProps {
   onChatSelect?: () => void
   navViewMode?: "chats" | "tasks"
   onNavViewModeChange?: (mode: "chats" | "tasks") => void
+  workspaces?: Array<{ id: string; name: string; color?: string | null; icon?: string | null }>
+  selectedWorkspace?: { id: string; name: string; color?: string | null; icon?: string | null } | null
+  onWorkspaceSelect?: (workspace: { id: string; name: string; color?: string | null; icon?: string | null }) => void
 }
 
 export function AgentsSidebar({
@@ -222,6 +224,9 @@ export function AgentsSidebar({
   onChatSelect,
   navViewMode = "chats",
   onNavViewModeChange,
+  workspaces = [],
+  selectedWorkspace,
+  onWorkspaceSelect,
 }: AgentsSidebarProps) {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
@@ -280,6 +285,8 @@ export function AgentsSidebar({
 
   // Pinned chats (stored in localStorage per project)
   const [pinnedChatIds, setPinnedChatIds] = useState<Set<string>>(new Set())
+  const [showNewWorkspaceInput, setShowNewWorkspaceInput] = useState(false)
+  const [newWorkspaceName, setNewWorkspaceName] = useState("")
   const helpButtonRef = useRef<HTMLButtonElement>(null)
   const archiveButtonRef = useRef<HTMLButtonElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -325,6 +332,33 @@ export function AgentsSidebar({
 
   // Get utils outside of callbacks - hooks must be called at top level
   const utils = trpc.useUtils()
+
+  // Create workspace mutation
+  const createWorkspaceMutation = trpc.workspaces.create.useMutation({
+    onSuccess: (newWorkspace) => {
+      utils.workspaces.list.invalidate()
+      setShowNewWorkspaceInput(false)
+      setNewWorkspaceName("")
+      onWorkspaceSelect?.(newWorkspace)
+      toast.success("Workspace created", {
+        description: `"${newWorkspace.name}" is ready to use.`,
+      })
+    },
+    onError: (error) => {
+      toast.error("Failed to create workspace", {
+        description: error.message,
+      })
+    },
+  })
+
+  const handleCreateWorkspace = () => {
+    const name = newWorkspaceName.trim()
+    if (!name) {
+      toast.error("Please enter a workspace name")
+      return
+    }
+    createWorkspaceMutation.mutate({ name })
+  }
 
   // Block tooltips temporarily after popover closes and remove focus
   useEffect(() => {
@@ -881,63 +915,93 @@ export function AgentsSidebar({
       data-mobile-fullscreen={isMobileFullscreen || undefined}
       data-sidebar-content
     >
-      {/* Unified header: tabs + close */}
-      <div className="px-2 pt-2 pb-1 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
-            <div className="flex items-center gap-1 p-0.5 bg-muted/50 rounded-lg h-9">
-              <button
-                onClick={() => onNavViewModeChange?.("chats")}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
-                  navViewMode === "chats"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <IconChatBubble className="w-4 h-4" />
-                <span>Chats</span>
+      {/* Unified header: workspace dropdown + close */}
+      <div className="px-2 pt-1.5 pb-1 flex-shrink-0">
+        <div className="flex items-center gap-1.5">
+          {/* Workspace dropdown - Linear style */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex-1 flex items-center gap-1.5 px-1.5 h-7 rounded-md hover:bg-foreground/5 transition-colors text-left min-w-0">
+                {/* Workspace name */}
+                <span className="text-sm font-medium text-foreground truncate flex-1">
+                  {selectedWorkspace?.name || "Workspace"}
+                </span>
+                {/* Dropdown chevron */}
+                <ChevronDown className="w-3 h-3 text-muted-foreground flex-shrink-0" />
               </button>
-              <button
-                onClick={() => onNavViewModeChange?.("tasks")}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
-                  navViewMode === "tasks"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <CheckIcon className="w-4 h-4" />
-                <span>Tasks</span>
-              </button>
-            </div>
-          </div>
-          {!isMobileFullscreen && (
-            <div className="transition-opacity duration-150 opacity-100">
-              <TooltipProvider>
-                <Tooltip delayDuration={500}>
-                  <TooltipTrigger asChild>
-                    <ButtonCustom
-                      variant="ghost"
-                      size="icon"
-                      onClick={onToggleSidebar}
-                      tabIndex={-1}
-                      className="h-8 w-8 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
-                      aria-label="Close sidebar"
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              {workspaces?.map((workspace) => {
+                const isSelected = selectedWorkspace?.id === workspace.id
+                const initial = workspace.name.charAt(0).toUpperCase()
+                return (
+                  <DropdownMenuItem
+                    key={workspace.id}
+                    onClick={() => onWorkspaceSelect?.(workspace)}
+                    className="gap-2"
+                  >
+                    <div 
+                      className={cn(
+                        "w-6 h-6 rounded-md flex items-center justify-center text-xs font-medium",
+                        isSelected ? "bg-primary text-primary-foreground" : "bg-muted"
+                      )}
+                      style={workspace.color && !isSelected ? { backgroundColor: workspace.color + '20', color: workspace.color } : undefined}
                     >
-                      <IconDoubleChevronLeft className="h-4 w-4" />
-                    </ButtonCustom>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    Close sidebar
-                    <Kbd>⌘\</Kbd>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
-          )}
+                      {workspace.icon || initial}
+                    </div>
+                    <span className="flex-1 truncate">{workspace.name}</span>
+                    {isSelected && <CheckIcon className="w-4 h-4" />}
+                  </DropdownMenuItem>
+                )
+              })}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem 
+                className="gap-2"
+                onClick={() => setShowNewWorkspaceInput(true)}
+              >
+                <PlusIcon className="w-4 h-4 text-muted-foreground" />
+                New Workspace
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          
         </div>
       </div>
+
+      {/* New workspace input */}
+      {showNewWorkspaceInput && (
+        <div className="px-2 pb-2">
+          <div className="flex items-center gap-1.5">
+            <Input
+              placeholder="Workspace name..."
+              value={newWorkspaceName}
+              onChange={(e) => setNewWorkspaceName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreateWorkspace()
+                if (e.key === "Escape") {
+                  setShowNewWorkspaceInput(false)
+                  setNewWorkspaceName("")
+                }
+              }}
+              autoFocus
+              className="flex-1 h-7 text-sm"
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleCreateWorkspace}
+              disabled={createWorkspaceMutation.isPending || !newWorkspaceName.trim()}
+              className="h-7 px-2"
+            >
+              {createWorkspaceMutation.isPending ? (
+                <IconSpinner className="h-3.5 w-3.5" />
+              ) : (
+                <CheckIcon className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Search and New Chat */}
       <div className="px-2 pb-2 flex-shrink-0 space-y-2">
@@ -986,7 +1050,7 @@ export function AgentsSidebar({
                 return
               }
             }}
-            className="w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40 h-9"
+            className="w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40 h-7"
           />
         </div>
         <TooltipProvider>
@@ -996,7 +1060,7 @@ export function AgentsSidebar({
                 onClick={handleNewAgent}
                 variant="outline"
                 size="sm"
-                className="h-9 px-3 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5"
+                className="h-7 px-3 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5"
               >
                 <span className="text-sm font-medium">New Chat</span>
               </ButtonCustom>

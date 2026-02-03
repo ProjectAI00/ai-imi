@@ -1,12 +1,15 @@
-import { execSync } from "node:child_process"
+import { exec } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { app } from "electron"
-import { stripVTControlCharacters } from "node:util"
+import { promisify, stripVTControlCharacters } from "node:util"
 
 // Cache the shell environment
 let cachedShellEnv: Record<string, string> | null = null
+let cachedShellEnvPromise: Promise<Record<string, string>> | null = null
+
+const execAsync = promisify(exec)
 
 // Delimiter for parsing env output
 const DELIMITER = "_CLAUDE_ENV_DELIMITER_"
@@ -67,6 +70,27 @@ export function getBundledClaudeBinaryPath(): string {
   return binaryPath
 }
 
+function getFallbackEnv(): Record<string, string> {
+  const home = os.homedir()
+  const fallbackPath = [
+    `${home}/.local/bin`,
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ].join(":")
+
+  return {
+    HOME: home,
+    USER: os.userInfo().username,
+    PATH: fallbackPath,
+    SHELL: process.env.SHELL || "/bin/zsh",
+    TERM: "xterm-256color",
+  }
+}
+
 /**
  * Parse environment variables from shell output
  */
@@ -93,69 +117,67 @@ function parseEnvOutput(output: string): Record<string, string> {
  * This captures PATH, HOME, and all shell profile configurations.
  * Results are cached for the lifetime of the process.
  */
-export function getClaudeShellEnvironment(): Record<string, string> {
+export async function getClaudeShellEnvironment(): Promise<Record<string, string>> {
   if (cachedShellEnv !== null) {
     return { ...cachedShellEnv }
   }
 
-  const shell = process.env.SHELL || "/bin/zsh"
-  const command = `echo -n "${DELIMITER}"; env; echo -n "${DELIMITER}"; exit`
+  if (!cachedShellEnvPromise) {
+    cachedShellEnvPromise = (async () => {
+      const shell = process.env.SHELL || "/bin/zsh"
+      const command = `echo -n "${DELIMITER}"; env; echo -n "${DELIMITER}"; exit`
 
-  try {
-    const output = execSync(`${shell} -ilc '${command}'`, {
-      encoding: "utf8",
-      timeout: 5000,
-      env: {
-        // Prevent Oh My Zsh from blocking with auto-update prompts
-        DISABLE_AUTO_UPDATE: "true",
-        // Minimal env to bootstrap the shell
-        HOME: os.homedir(),
-        USER: os.userInfo().username,
-        SHELL: shell,
-      },
-    })
+      try {
+        const { stdout } = await execAsync(`${shell} -ilc '${command}'`, {
+          encoding: "utf8",
+          timeout: 5000,
+          env: {
+            // Prevent Oh My Zsh from blocking with auto-update prompts
+            DISABLE_AUTO_UPDATE: "true",
+            // Minimal env to bootstrap the shell
+            HOME: os.homedir(),
+            USER: os.userInfo().username,
+            SHELL: shell,
+          },
+        })
 
-    const env = parseEnvOutput(output)
+        const env = parseEnvOutput(stdout)
 
-    // Strip keys that could interfere with Claude's auth resolution
-    for (const key of STRIPPED_ENV_KEYS) {
-      if (key in env) {
-        console.log(`[claude-env] Stripped ${key} from shell environment`)
-        delete env[key]
+        // Strip keys that could interfere with Claude's auth resolution
+        for (const key of STRIPPED_ENV_KEYS) {
+          if (key in env) {
+            console.log(`[claude-env] Stripped ${key} from shell environment`)
+            delete env[key]
+          }
+        }
+
+        console.log(
+          `[claude-env] Loaded ${Object.keys(env).length} environment variables from shell`,
+        )
+        cachedShellEnv = env
+        return env
+      } catch (error) {
+        console.error("[claude-env] Failed to load shell environment:", error)
+
+        const fallback = getFallbackEnv()
+        console.log("[claude-env] Using fallback environment")
+        cachedShellEnv = fallback
+        return fallback
       }
-    }
+    })().finally(() => {
+      cachedShellEnvPromise = null
+    })
+  }
 
-    console.log(
-      `[claude-env] Loaded ${Object.keys(env).length} environment variables from shell`,
-    )
-    cachedShellEnv = env
-    return { ...env }
+  const env = await cachedShellEnvPromise
+  return { ...env }
+}
+
+export async function preloadClaudeEnv(): Promise<void> {
+  try {
+    await getClaudeShellEnvironment()
   } catch (error) {
-    console.error("[claude-env] Failed to load shell environment:", error)
-
-    // Fallback: return minimal required env
-    const home = os.homedir()
-    const fallbackPath = [
-      `${home}/.local/bin`,
-      "/opt/homebrew/bin",
-      "/usr/local/bin",
-      "/usr/bin",
-      "/bin",
-      "/usr/sbin",
-      "/sbin",
-    ].join(":")
-
-    const fallback: Record<string, string> = {
-      HOME: home,
-      USER: os.userInfo().username,
-      PATH: fallbackPath,
-      SHELL: process.env.SHELL || "/bin/zsh",
-      TERM: "xterm-256color",
-    }
-
-    console.log("[claude-env] Using fallback environment")
-    cachedShellEnv = fallback
-    return { ...fallback }
+    console.warn("[claude-env] Failed to preload shell environment:", error)
   }
 }
 
@@ -163,15 +185,15 @@ export function getClaudeShellEnvironment(): Record<string, string> {
  * Build the complete environment for Claude SDK.
  * Merges shell environment, process.env, and custom overrides.
  */
-export function buildClaudeEnv(options?: {
+export async function buildClaudeEnv(options?: {
   ghToken?: string
   customEnv?: Record<string, string>
-}): Record<string, string> {
+}): Promise<Record<string, string>> {
   const env: Record<string, string> = {}
 
   // 1. Start with shell environment (has HOME, full PATH, etc.)
   try {
-    Object.assign(env, getClaudeShellEnvironment())
+    Object.assign(env, await getClaudeShellEnvironment())
   } catch (error) {
     console.error("[claude-env] Shell env failed, using process.env")
   }
@@ -220,6 +242,7 @@ export function buildClaudeEnv(options?: {
  */
 export function clearClaudeEnvCache(): void {
   cachedShellEnv = null
+  cachedShellEnvPromise = null
 }
 
 /**

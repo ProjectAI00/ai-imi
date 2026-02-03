@@ -15,8 +15,11 @@ export const api = {
   agents: {
     getAgentChats: {
       useQuery: (_args?: AnyObj, _opts?: AnyObj) => {
-        // Use real tRPC
-        const result = trpc.chats.list.useQuery({})
+        // Use real tRPC with caching
+        const result = trpc.chats.list.useQuery({}, {
+          staleTime: 10_000, // Keep list fresh for 10 seconds
+          gcTime: 5 * 60 * 1000,
+        })
         return {
           data: result.data ?? [],
           isLoading: result.isLoading,
@@ -28,7 +31,13 @@ export const api = {
         const chatId = args?.chatId
         const result = trpc.chats.get.useQuery(
           { id: chatId! },
-          { enabled: !!chatId && opts?.enabled !== false },
+          { 
+            enabled: !!chatId && opts?.enabled !== false,
+            // Keep data fresh for 30 seconds to prevent refetch flicker on navigation
+            staleTime: 30_000,
+            // Cache data for 5 minutes even when not mounted
+            gcTime: 5 * 60 * 1000,
+          },
         )
 
         // Memoize transformation to prevent infinite re-renders

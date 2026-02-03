@@ -55,7 +55,8 @@ import { ResizableSidebar } from "../../../components/ui/resizable-sidebar"
 // import { useCombinedAuth } from "@/lib/hooks/use-combined-auth"
 const useCombinedAuth = () => ({ userId: null }) // Desktop mock
 import { Button } from "../../../components/ui/button"
-import { AlignJustify } from "lucide-react"
+import { IconSidebarToggle } from "../../../components/ui/icons"
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip"
 import { AgentsQuickSwitchDialog } from "../components/agents-quick-switch-dialog"
 import { SubChatsQuickSwitchDialog } from "../components/subchats-quick-switch-dialog"
 import { useArchiveChat } from "../../sidebar/hooks/use-archive-chat"
@@ -94,10 +95,6 @@ export function AgentsContent() {
   const { user } = useUser()
   const { signOut } = useClerk()
   const isAdmin = useIsAdmin()
-
-  useEffect(() => {
-    setRightPanelMode("closed")
-  }, [selectedChatId, setRightPanelMode])
 
   // Quick-switch dialog state - Agents (Opt+Ctrl+Tab)
   const [quickSwitchOpen, setQuickSwitchOpen] = useAtom(
@@ -823,13 +820,6 @@ export function AgentsContent() {
   // Use worktreePath if available, otherwise fall back to project path
   const worktreePath = ((chatData as any)?.worktreePath || (chatData as any)?.project?.path) as string | undefined
   const canShowTerminal = !!worktreePath
-  
-  // Debug log
-  console.log("[Terminal] chatData:", { 
-    worktreePath: (chatData as any)?.worktreePath, 
-    projectPath: (chatData as any)?.project?.path,
-    resolved: worktreePath 
-  })
 
   // Mobile layout - completely different structure
   if (isMobile) {
@@ -954,7 +944,7 @@ export function AgentsContent() {
   // Desktop layout
   return (
     <>
-      <div className="flex h-full">
+      <div className="flex h-full gap-1.5">
         {/* Sub-chats sidebar - only show in sidebar mode when viewing a chat */}
         <ResizableSidebar
           isOpen={!!isSubChatsSidebarOpen}
@@ -986,7 +976,7 @@ export function AgentsContent() {
 
         {/* Main content - show ChatView unless it's been moved to right panel */}
         <div
-          className="flex-1 min-w-0 overflow-hidden"
+          className="flex-1 min-w-0 overflow-hidden bg-background rounded-[14px] shadow-sm"
           style={{ minWidth: "350px" }}
         >
           {selectedChatId && rightPanelMode !== "chat" ? (
@@ -1016,24 +1006,55 @@ export function AgentsContent() {
               />
             </div>
           ) : selectedChatId && rightPanelMode === "chat" ? (
-            // Chat is in right panel - show workspace placeholder in center
-            <div className="h-full flex flex-col items-center justify-center bg-background text-muted-foreground">
-              <p className="text-sm">Chat moved to right panel</p>
-              <button
-                onClick={() => setRightPanelMode("closed")}
-                className="text-xs mt-2 text-primary hover:underline"
-              >
-                Move chat back
-              </button>
+            // Chat is in right panel - show workspace placeholder in center with sidebar toggle
+            <div className="h-full flex flex-col bg-background rounded-[14px]">
+              {/* Header with sidebar toggle */}
+              <div className="flex items-center h-10 px-2 flex-shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setSidebarOpen((prev) => !prev)}
+                      className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+                    >
+                      <IconSidebarToggle className="h-4 w-4 scale-x-[-1]" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {sidebarOpen ? "Close" : "Open"} sidebar<span className="ml-1.5 text-muted-foreground">⌘\</span>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {/* Centered content */}
+              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
+                <p className="text-sm">Chat moved to right panel</p>
+                <button
+                  onClick={() => setRightPanelMode("closed")}
+                  className="text-xs mt-2 text-primary hover:underline"
+                >
+                  Move chat back
+                </button>
+              </div>
             </div>
           ) : (
             <div className="h-full flex flex-col relative overflow-hidden">
-              <NewChatForm key={`new-chat-${newChatFormKeyRef.current}`} />
+              <NewChatForm
+                key={`new-chat-${newChatFormKeyRef.current}`}
+                onOpenRightPanel={() => {
+                  if (rightPanelMode === "closed") {
+                    setRightPanelMode("terminal")
+                  } else {
+                    setRightPanelMode("closed")
+                  }
+                }}
+                rightPanelMode={rightPanelMode}
+              />
             </div>
           )}
         </div>
 
-        {/* Right panel - Terminal or Chat */}
+        {/* Right panel - Terminal or Chat - with floating card effect */}
         <ResizableSidebar
           isOpen={rightPanelMode !== "closed"}
           onClose={() => setRightPanelMode("closed")}
@@ -1045,6 +1066,7 @@ export function AgentsContent() {
           initialWidth={0}
           exitWidth={0}
         >
+          <div className="h-full rounded-[14px] overflow-hidden shadow-sm bg-background">
           {rightPanelMode === "terminal" && selectedChatId && worktreePath && (
             <TerminalSidebar
               chatId={selectedChatId}
@@ -1070,6 +1092,7 @@ export function AgentsContent() {
                 onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
                 selectedTeamName={selectedTeam?.name}
                 selectedTeamImageUrl={selectedTeam?.image_url}
+                isRightPanel={true}
                 onToggleSubChatsSidebar={() =>
                   setSubChatsSidebarMode((prev) =>
                     prev === "sidebar" ? "tabs" : "sidebar",
@@ -1082,6 +1105,14 @@ export function AgentsContent() {
               />
             </div>
           )}
+          {/* Placeholder when no chat is selected */}
+          {!selectedChatId && (
+            <div className="h-full flex flex-col items-center justify-center bg-background text-muted-foreground p-4">
+              <p className="text-sm">Start a chat to use the right panel</p>
+              <p className="text-xs mt-1 text-muted-foreground/70">Terminal and chat panel will appear here</p>
+            </div>
+          )}
+          </div>
         </ResizableSidebar>
       </div>
 

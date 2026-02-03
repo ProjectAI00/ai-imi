@@ -363,7 +363,7 @@ export function ResizableSidebar({
               opacity: 1,
             }}
             exit={{
-              width: exitWidth,
+              width: 0,
               opacity: 0,
             }}
             transition={{

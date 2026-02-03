@@ -2,16 +2,24 @@ import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
 import { observable } from "@trpc/server/observable"
 import { app } from "electron"
 import path from "path"
-import fs from "fs"
+import fs from "fs/promises"
+import { existsSync, readFileSync } from "fs"
 import type { CliAdapter, ChatInput, UIMessageChunk } from "../types"
 
 // Active processes for cancellation
 const activeProcesses = new Map<string, ChildProcessWithoutNullStreams>()
 
+// Cached binary path to avoid repeated file I/O
+let cachedBinaryPath: string | null = null
+
 /**
  * Get path to the bundled cursor-agent binary from @nothumanwork/cursor-agents-sdk
+ * Uses sync file reads but caches result for subsequent calls
  */
 function getBundledCursorAgentPath(): string {
+  // Return cached path if available
+  if (cachedBinaryPath) return cachedBinaryPath
+  
   const isDev = !app.isPackaged
 
   // In dev mode, the binary is in node_modules
@@ -22,7 +30,7 @@ function getBundledCursorAgentPath(): string {
   } else {
     // In production, check both possible locations
     basePath = path.join(process.resourcesPath, "node_modules", "@nothumanwork", "cursor-agents-sdk")
-    if (!fs.existsSync(basePath)) {
+    if (!existsSync(basePath)) {
       basePath = path.join(app.getAppPath(), "node_modules", "@nothumanwork", "cursor-agents-sdk")
     }
   }
@@ -31,12 +39,13 @@ function getBundledCursorAgentPath(): string {
   const manifestPath = path.join(basePath, "vendor", "manifest.json")
 
   try {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"))
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"))
     const binaryPath = path.join(basePath, manifest.path)
 
     console.log("[Cursor] Bundled binary path:", binaryPath)
-    console.log("[Cursor] Binary exists:", fs.existsSync(binaryPath))
-
+    
+    // Cache the path for future calls
+    cachedBinaryPath = binaryPath
     return binaryPath
   } catch (error) {
     console.error("[Cursor] Failed to read manifest:", error)
@@ -44,7 +53,9 @@ function getBundledCursorAgentPath(): string {
     const platform = process.platform === "win32" ? "windows" : process.platform
     const arch = process.arch
     const binaryName = process.platform === "win32" ? "cursor-agent.cmd" : "cursor-agent"
-    return path.join(basePath, "vendor", `*`, `${platform}-${arch}`, binaryName)
+    const fallbackPath = path.join(basePath, "vendor", `*`, `${platform}-${arch}`, binaryName)
+    cachedBinaryPath = fallbackPath
+    return fallbackPath
   }
 }
 
@@ -145,7 +156,7 @@ export const cursorAdapter: CliAdapter = {
   async isAvailable(): Promise<boolean> {
     try {
       const binaryPath = getBundledCursorAgentPath()
-      return fs.existsSync(binaryPath)
+      return existsSync(binaryPath)
     } catch {
       return false
     }
@@ -232,10 +243,24 @@ export const cursorAdapter: CliAdapter = {
 
       safeEmit({ type: "start" })
 
+      // Track if we detect auth error early
+      let authErrorDetected = false
+
       const handleOutput = (data: Buffer, source: "stdout" | "stderr") => {
         if (isCancelled) return
         const text = data.toString()
         console.log(`[Cursor] ${source} received, length:`, text.length)
+
+        // Check for auth error pattern early - don't emit garbled UI
+        const lowerText = text.toLowerCase()
+        if (lowerText.includes("press any key to sign in") ||
+            lowerText.includes("sign in") ||
+            lowerText.includes("login") ||
+            lowerText.includes("authentication")) {
+          console.log("[Cursor] Auth error detected in output, suppressing garbled UI")
+          authErrorDetected = true
+          return // Don't emit this garbled output
+        }
 
         const sanitized = sanitizeOutput(text)
         if (!sanitized) return
@@ -302,43 +327,39 @@ export const cursorAdapter: CliAdapter = {
         }
         console.log("[Cursor] Process closed with exit code:", code)
         console.log("[Cursor] Accumulated output length:", accumulated.length)
+        console.log("[Cursor] Auth error detected:", authErrorDetected)
 
         if (hasErrored) {
           console.log("[Cursor] Skipping close handler - already handled by error handler")
           return
         }
 
-        if (code !== 0 && code !== null) {
-          // Check for auth-related errors
+        // If auth error was detected early or exit code indicates error
+        if (authErrorDetected || (code !== 0 && code !== null)) {
+          // Check for auth-related errors in accumulated output as well
           const lowerAccumulated = accumulated.toLowerCase()
-          const isAuthError = lowerAccumulated.includes("unauthorized") ||
+          const isAuthError = authErrorDetected ||
+            lowerAccumulated.includes("unauthorized") ||
             lowerAccumulated.includes("authentication") ||
             lowerAccumulated.includes("not logged in") ||
             lowerAccumulated.includes("login required") ||
             lowerAccumulated.includes("api key") ||
             lowerAccumulated.includes("please log in") ||
-            lowerAccumulated.includes("cursor-agent login")
+            lowerAccumulated.includes("cursor-agent login") ||
+            lowerAccumulated.includes("press any key to sign in") ||
+            lowerAccumulated.includes("sign in")
 
           if (isAuthError) {
-            // Emit auth error with login instructions
-            if (!textStarted) {
-              safeEmit({ type: "text-start", id: textId })
-              textStarted = true
+            // Emit auth-error type which triggers the login modal in the UI
+            // Don't emit text - the modal handles the UI
+            if (textStarted) {
+              safeEmit({ type: "text-end", id: textId })
             }
             safeEmit({
-              type: "text-delta",
-              id: textId,
-              delta: "\n\n**Authentication Required**\n\nPlease authenticate with Cursor by running this command in your terminal:\n\n```\ncursor-agent login\n```\n\nOr set the `CURSOR_API_KEY` environment variable.",
-            })
-            safeEmit({
-              type: "error",
-              errorText: "Authentication required. Run 'cursor-agent login' in your terminal to authenticate.",
-              debugInfo: {
-                category: "CURSOR_AUTH_REQUIRED",
-                cli: "cursor",
-              },
+              type: "auth-error",
+              cli: "cursor",
             } as UIMessageChunk)
-          } else {
+          } else if (code !== 0 && code !== null) {
             safeEmit({
               type: "error",
               errorText: `Cursor exited with code ${code}`,
@@ -351,20 +372,18 @@ export const cursorAdapter: CliAdapter = {
           }
         }
 
-        // If no output was received, emit a fallback message
-        if (!accumulated.trim()) {
-          if (!textStarted) {
-            safeEmit({ type: "text-start", id: textId })
-            textStarted = true
-          }
+        // If no output was received and not an auth error, emit a fallback message
+        if (!accumulated.trim() && !authErrorDetected) {
+          const fallbackId = `cursor-fallback-${Date.now()}`
+          safeEmit({ type: "text-start", id: fallbackId })
           safeEmit({
             type: "text-delta",
-            id: textId,
-            delta: "No response received from Cursor Agent. Make sure you're authenticated by running: cursor-agent login",
+            id: fallbackId,
+            delta: "No response received from Cursor Agent. Make sure you're authenticated by running: `cursor-agent login`",
           })
-        }
-
-        if (textStarted) {
+          safeEmit({ type: "text-end", id: fallbackId })
+        } else if (textStarted && !authErrorDetected) {
+          // Only end if we started and didn't handle auth error (which creates its own text block)
           safeEmit({ type: "text-end", id: textId })
         }
 

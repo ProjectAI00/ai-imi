@@ -1,15 +1,51 @@
 import { spawn } from "child_process"
-import crypto from "node:crypto"
 import { observable } from "@trpc/server/observable"
 import type { CliAdapter, ChatInput, UIMessageChunk } from "../types"
-import { PLAN_MODE_TOOLS, setAskUserEmitter, resolveAskUserResponse } from "../tools"
+import { PLAN_MODE_TOOLS, setAskUserEmitter } from "../tools"
 
 // Lazy-loaded Copilot SDK types and client
 let CopilotClientClass: typeof import("@github/copilot-sdk").CopilotClient | null = null
 let copilotClient: InstanceType<typeof import("@github/copilot-sdk").CopilotClient> | null = null
+let clientStartPromise: Promise<any> | null = null
 
 // Active sessions for cancellation (SDK-based)
 const activeSessions = new Map<string, { session: any; abort: () => Promise<void> }>()
+
+/**
+ * Preload the Copilot SDK client during app startup.
+ * This avoids blocking the first message with SDK import and client initialization.
+ */
+export async function preloadCopilotSDK(): Promise<void> {
+  if (clientStartPromise) return clientStartPromise
+  
+  console.log("[Copilot SDK] Preloading SDK...")
+  const start = Date.now()
+  
+  clientStartPromise = (async () => {
+    try {
+      if (!CopilotClientClass) {
+        const sdk = await import("@github/copilot-sdk")
+        CopilotClientClass = sdk.CopilotClient
+        console.log(`[Copilot SDK] SDK imported in ${Date.now() - start}ms`)
+      }
+      
+      if (!copilotClient) {
+        copilotClient = new CopilotClientClass!({
+          autoStart: true,
+          autoRestart: true,
+        })
+        await copilotClient.start()
+        console.log(`[Copilot SDK] Client started in ${Date.now() - start}ms total`)
+      }
+    } catch (err) {
+      console.warn("[Copilot SDK] Preload failed:", err)
+      clientStartPromise = null
+      throw err
+    }
+  })()
+  
+  return clientStartPromise
+}
 
 /**
  * Map Copilot tool names to UI registry names (PascalCase)
@@ -68,19 +104,32 @@ function normalizeToolName(toolName: string): string {
 
 /**
  * Get or create the singleton Copilot client
+ * If preloadCopilotSDK() was called, this will reuse the preloaded client.
  */
 async function getCopilotClient() {
+  // If preload is in progress, wait for it
+  if (clientStartPromise) {
+    await clientStartPromise
+    return copilotClient!
+  }
+  
+  // Otherwise do lazy init (first message before preload completed)
+  const start = Date.now()
   if (!CopilotClientClass) {
+    console.log(`[Copilot SDK] Importing SDK (lazy)...`)
     const sdk = await import("@github/copilot-sdk")
     CopilotClientClass = sdk.CopilotClient
+    console.log(`[Copilot SDK] SDK imported in ${Date.now() - start}ms`)
   }
   
   if (!copilotClient) {
+    console.log(`[Copilot SDK] Creating client...`)
     copilotClient = new CopilotClientClass!({
       autoStart: true,
       autoRestart: true,
     })
     await copilotClient.start()
+    console.log(`[Copilot SDK] Client started in ${Date.now() - start}ms total`)
   }
   
   return copilotClient
@@ -149,7 +198,11 @@ export const copilotAdapter: CliAdapter = {
   },
 
   chat(input: ChatInput) {
+    const chatStartTime = Date.now()
+    console.log(`[Copilot SDK] chat() called`)
+    
     return observable<UIMessageChunk>((emit: { next: (chunk: UIMessageChunk) => void; complete: () => void; error: (err: Error) => void }) => {
+      console.log(`[Copilot SDK] Observable callback at ${Date.now() - chatStartTime}ms`)
       const model = resolveModel(input.model)
       const textId = `copilot-text-${Date.now()}`
       let textStarted = false
@@ -163,6 +216,10 @@ export const copilotAdapter: CliAdapter = {
           return
         }
         try {
+          // Log text deltas (but not every single one to avoid spam)
+          if (chunk.type !== "text-delta" || Math.random() < 0.1) {
+            console.log(`[Copilot SDK] Emitting: ${chunk.type}`)
+          }
           emit.next(chunk)
         } catch (err) {
           console.error("[Copilot SDK] Error:", err)
@@ -188,8 +245,12 @@ export const copilotAdapter: CliAdapter = {
 
       // Run the SDK session asynchronously
       const runSession = async () => {
+        const runStart = Date.now()
+        console.log(`[Copilot SDK] runSession() started at ${runStart - chatStartTime}ms`)
         try {
+          console.log(`[Copilot SDK] Getting client...`)
           const client = await getCopilotClient()
+          console.log(`[Copilot SDK] Got client at ${Date.now() - chatStartTime}ms`)
 
           let session: any
 
@@ -242,7 +303,9 @@ export const copilotAdapter: CliAdapter = {
               setAskUserEmitter(safeEmit)
             }
 
+            const sessionCreateStart = Date.now()
             session = await client.createSession(sessionConfig)
+            console.log(`[Copilot SDK] Session created in ${Date.now() - sessionCreateStart}ms`)
           }
           // Ensure ask_user tool emitter is wired for this session
           if (input.mode === "plan") {
@@ -263,13 +326,22 @@ export const copilotAdapter: CliAdapter = {
 
           safeEmit({ type: "start" })
 
-          // Subscribe to events for streaming
+          // Promise that resolves when session becomes idle
+          let resolveIdle: () => void
+          const idlePromise = new Promise<void>((resolve) => {
+            resolveIdle = resolve
+          })
+
+          // Subscribe to events for streaming - events fire in real-time
+          const eventStart = Date.now()
           const unsubscribe = session.on((event: any) => {
+            const elapsed = Date.now() - eventStart
+            console.log(`[Copilot SDK] [${elapsed}ms] Event: ${event.type}`)
             if (!isSubscriptionActive) return
 
             switch (event.type) {
               case "assistant.message_delta":
-                // Streaming text chunk
+                // Streaming text chunk - emit immediately
                 if (!textStarted) {
                   safeEmit({ type: "text-start", id: textId })
                   textStarted = true
@@ -304,10 +376,8 @@ export const copilotAdapter: CliAdapter = {
                 // Tool started - emit to UI for real-time display
                 const startToolName = normalizeToolName(event.data?.toolName || "unknown")
                 const startToolCallId = event.data?.toolCallId || `tool-${Date.now()}`
-                const startTs = Date.now()
-                console.log(`[Copilot SDK] [${startTs}] Tool started:`, event.data?.toolName, "→", startToolName)
+                console.log(`[Copilot SDK] Tool started:`, event.data?.toolName, "→", startToolName)
                 
-                // Always emit both start AND available - UI needs tool-input-available to show the tool
                 safeEmit({
                   type: "tool-input-start",
                   toolCallId: startToolCallId,
@@ -322,19 +392,15 @@ export const copilotAdapter: CliAdapter = {
                 break
 
               case "tool.execution_partial_result":
-                // Streaming tool output - could emit as tool-output-delta if UI supports it
-                console.log(`[Copilot SDK] [${Date.now()}] Tool partial result:`, event.data?.toolCallId)
+                console.log(`[Copilot SDK] Tool partial result:`, event.data?.toolCallId)
                 break
 
               case "tool.execution_progress":
-                // Progress message from tool (e.g., "Installing dependencies...")
-                console.log(`[Copilot SDK] [${Date.now()}] Tool progress:`, event.data?.progressMessage)
+                console.log(`[Copilot SDK] Tool progress:`, event.data?.progressMessage)
                 break
 
               case "tool.execution_complete":
-                // Tool finished - emit result
-                const endTs = Date.now()
-                console.log(`[Copilot SDK] [${endTs}] Tool ended:`, event.data?.toolCallId, event.data?.success)
+                console.log(`[Copilot SDK] Tool ended:`, event.data?.toolCallId, event.data?.success)
                 if (event.data?.success && event.data?.result) {
                   safeEmit({
                     type: "tool-output-available",
@@ -348,7 +414,6 @@ export const copilotAdapter: CliAdapter = {
                     errorText: event.data.error.message || "Tool execution failed",
                   })
                 } else {
-                  // Tool completed without result - still emit completion so UI doesn't hang
                   safeEmit({
                     type: "tool-output-available",
                     toolCallId: event.data.toolCallId,
@@ -367,186 +432,45 @@ export const copilotAdapter: CliAdapter = {
                   errorText: event.data?.message || "Unknown Copilot SDK error",
                   debugInfo: {
                     category: "COPILOT_SDK_ERROR",
-                    cli: "copilot-sdk",
+                    cli: "copilot",
                   },
                 } as UIMessageChunk)
+                resolveIdle!()
                 break
 
               case "session.idle":
-                // Session finished processing
-                console.log(`[Copilot SDK] [${Date.now()}] Session idle - complete`)
+                // Session finished - resolve promise to continue cleanup
+                console.log(`[Copilot SDK] Session idle - completing`)
+                resolveIdle!()
                 break
             }
           })
 
-          // Send the user message and wait for completion
-          // Use 10 minute timeout for complex agent operations
-          console.log(`[Copilot SDK] [${Date.now()}] Sending message, waiting for response...`)
-          await session.sendAndWait({ prompt: userPrompt }, 600000)
-          console.log(`[Copilot SDK] [${Date.now()}] sendAndWait completed`)
+          // Send message (non-blocking) - events will stream to UI
+          console.log(`[Copilot SDK] Sending message...`)
+          const sendStart = Date.now()
+          await session.send({ prompt: userPrompt })
+          console.log(`[Copilot SDK] [${Date.now() - sendStart}ms] send() returned, waiting for idle...`)
+          
+          // Wait for session to become idle (events continue streaming)
+          await idlePromise
+          console.log(`[Copilot SDK] Session completed`)
 
-          // Cleanup event subscription
+          // Cleanup
           unsubscribe()
-          console.log(`[Copilot SDK] [${Date.now()}] Emitting finish`)
 
-          // Emit final chunks BEFORE marking inactive
           if (textStarted) {
             safeEmit({ type: "text-end", id: textId })
           }
-                // Plan-mode post-processing: create goals/tasks like Claude path
-          if (input.mode === "plan") {
-            try {
-              const db = (await import("../../db")).getDatabase()
-              const { chats, goals, tasks, subChats } = await import("../../db/schema/index.js")
-              const { hasTaskDefinitions, extractTasksFromText } = await import("../task-extraction.js")
-              const { parsePlanBuilderResponse, isPlanBuilderComplete } = await import("../plan-agent.js")
-              const { eq } = await import("drizzle-orm")
-              const { calculateDueDate } = await import("../../tasks/index.js")
-              const assistantText = accumulatedText
-
-              if (assistantText) {
-                const existingSub = db.select().from(subChats).where(eq(subChats.id, input.subChatId)).get()
-                const existingMessages = existingSub?.messages ? JSON.parse(existingSub.messages) : []
-                const assistantMessage = {
-                  id: crypto.randomUUID(),
-                  role: "assistant",
-                  parts: [{ type: "text", text: assistantText }],
-                  metadata: currentSessionId ? { sessionId: currentSessionId } : undefined,
-                }
-                const finalMessages = [...existingMessages, assistantMessage]
-                db.update(subChats)
-                  .set({ messages: JSON.stringify(finalMessages), updatedAt: new Date() })
-                  .where(eq(subChats.id, input.subChatId))
-                  .run()
-              }
-
-              // Task extraction from ```tasks blocks
-              try {
-                if (hasTaskDefinitions(assistantText)) {
-                  const extraction = extractTasksFromText(assistantText)
-                  if (extraction.tasks && extraction.tasks.length > 0) {
-                    const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
-                    const projectId = chat?.projectId
-                    const createdTasks: Array<{ id: string; title: string }> = []
-                    for (const task of extraction.tasks) {
-                      const timeFrame = task.timeFrame || "this_week"
-                      const dueDate = calculateDueDate(timeFrame)
-                      const created = db
-                        .insert(tasks)
-                        .values({
-                          title: task.title,
-                          description: task.description,
-                          context: task.context,
-                          tags: JSON.stringify(task.tags || []),
-                          priority: task.priority || "medium",
-                          timeFrame,
-                          dueDate,
-                          projectId,
-                          chatId: input.chatId,
-                          assigneeType: "ai",
-                          status: "todo",
-                          createdBy: "ai",
-                        })
-                        .returning()
-                        .get()
-                      createdTasks.push({ id: created.id, title: created.title })
-                    }
-                    if (createdTasks.length > 0) {
-                      safeEmit({ type: "tasks-created", tasks: createdTasks })
-                    }
-                  }
-                }
-              } catch (taskErr) {
-                console.error("[Copilot plan mode] Failed task extraction", taskErr)
-              }
-
-              // Plan builder goal + tasks
-              try {
-                const planResult = parsePlanBuilderResponse(assistantText)
-                if (isPlanBuilderComplete(planResult)) {
-                  const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
-                  const workspaceId = chat?.projectId
-                  const createdGoal = db
-                    .insert(goals)
-                    .values({
-                      name: planResult.goal!.name!,
-                      description: planResult.goal!.description!,
-                      workspaceId,
-                      priority: planResult.goal!.priority || "medium",
-                      context: planResult.goal!.context,
-                      tags: "[]",
-                      status: "todo",
-                      workspacePath: planResult.goal!.workspacePath,
-                      relevantFiles: JSON.stringify(planResult.goal!.relevantFiles || []),
-                    })
-                    .returning()
-                    .get()
-                  const createdTaskIds: string[] = []
-                  for (const taskSkeleton of planResult.tasks) {
-                    const timeFrame = taskSkeleton.timeFrame || "this_week"
-                    const dueDate = calculateDueDate(timeFrame)
-                    const created = db
-                      .insert(tasks)
-                      .values({
-                        title: taskSkeleton.title!,
-                        description: taskSkeleton.description!,
-                        context: taskSkeleton.context,
-                        tags: JSON.stringify(taskSkeleton.tags || []),
-                        priority: taskSkeleton.priority || "medium",
-                        timeFrame,
-                        dueDate,
-                        projectId: workspaceId,
-                        goalId: createdGoal.id,
-                        chatId: input.chatId,
-                        assigneeType: "ai",
-                        status: "todo",
-                        createdBy: "ai",
-                        workspacePath: taskSkeleton.workspacePath || planResult.goal!.workspacePath,
-                        relevantFiles: JSON.stringify(taskSkeleton.relevantFiles || []),
-                        tools: JSON.stringify(taskSkeleton.tools || []),
-                        acceptanceCriteria: taskSkeleton.acceptanceCriteria,
-                      })
-                      .returning()
-                      .get()
-                    createdTaskIds.push(created.id)
-                  }
-                  safeEmit({
-                    type: "goal-created",
-                    goalId: createdGoal.id,
-                    goalName: createdGoal.name,
-                    taskCount: createdTaskIds.length,
-                  })
-                }
-              } catch (planErr) {
-                console.error("[Copilot plan mode] Failed plan builder persistence", planErr)
-              }
-            } catch (error) {
-              console.error("[Copilot plan mode] Failed to persist goal/tasks", error)
-            }
-          }
           safeEmit({ type: "finish" })
-
-          // NOW mark as inactive after emitting
-          isSubscriptionActive = false
           safeComplete()
-          console.log(`[Copilot SDK] [${Date.now()}] Stream complete`)
+          isSubscriptionActive = false
 
-          // Remove from active sessions BEFORE destroying to prevent double cleanup
           activeSessions.delete(input.subChatId)
-
-          // Destroy session after completion (catch errors silently)
-          try {
-            await session.destroy()
-          } catch (destroyErr) {
-            // Session might already be destroyed, ignore
-            console.log("[Copilot SDK] Session destroy (expected):", destroyErr)
-          }
+          session.destroy().catch(() => {})
 
         } catch (error: any) {
           console.error("[Copilot SDK] Error:", error)
-
-          // Mark subscription as inactive
-          isSubscriptionActive = false
 
           if (textStarted) {
             safeEmit({ type: "text-end", id: textId })
@@ -565,17 +489,14 @@ export const copilotAdapter: CliAdapter = {
               errorText: "GitHub Copilot CLI not found. Install it from: https://github.com/github/copilot-cli",
               debugInfo: {
                 category: "COPILOT_NOT_INSTALLED",
-                cli: "copilot-sdk",
+                cli: "copilot",
               },
             } as UIMessageChunk)
           } else if (isAuthError) {
+            // Emit auth-error type which triggers the login modal in the UI
             safeEmit({
-              type: "error",
-              errorText: "GitHub authentication required. Run `copilot /login` in your terminal to authenticate.",
-              debugInfo: {
-                category: "COPILOT_AUTH_REQUIRED",
-                cli: "copilot-sdk",
-              },
+              type: "auth-error",
+              cli: "copilot",
             } as UIMessageChunk)
           } else {
             safeEmit({
@@ -583,13 +504,15 @@ export const copilotAdapter: CliAdapter = {
               errorText: `Copilot SDK error: ${errorMessage}`,
               debugInfo: {
                 category: "COPILOT_SDK_ERROR",
-                cli: "copilot-sdk",
+                cli: "copilot",
               },
             } as UIMessageChunk)
           }
 
           safeEmit({ type: "finish" })
+          // CRITICAL: Call safeComplete() BEFORE setting inactive
           safeComplete()
+          isSubscriptionActive = false
           activeSessions.delete(input.subChatId)
         }
       }

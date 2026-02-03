@@ -98,6 +98,7 @@ function useBatchHighlight(
   lines: DiffLine[],
   language: string,
   themeId: string,
+  enabled: boolean,
 ): Map<number, string> {
   const [highlightedMap, setHighlightedMap] = useState<Map<number, string>>(
     () => new Map(),
@@ -110,7 +111,7 @@ function useBatchHighlight(
   )
 
   useEffect(() => {
-    if (lines.length === 0) {
+    if (!enabled || lines.length === 0) {
       setHighlightedMap(new Map())
       return
     }
@@ -146,7 +147,7 @@ function useBatchHighlight(
       cancelled = true
       clearTimeout(timer)
     }
-  }, [linesKey, language, themeId, lines.length])
+  }, [linesKey, language, themeId, lines.length, enabled])
 
   return highlightedMap
 }
@@ -373,6 +374,7 @@ export const AgentEditTool = memo(function AgentEditTool({
     displayLines,
     language,
     codeTheme,
+    !isInputStreaming,
   )
 
   // Check if we have VISIBLE content to show

@@ -2,7 +2,7 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
-import { AlignJustify, Plus } from "lucide-react"
+import { AlignJustify, Plus, TerminalSquare } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { Button } from "../../../components/ui/button"
@@ -18,9 +18,14 @@ import {
   BranchIcon,
   CheckIcon,
   ClaudeCodeIcon,
+  ClockIcon,
   CursorIcon,
+  DiffIcon,
   GitHubLogo,
   IconChevronDown,
+  IconOpenSidebarRight,
+  IconCloseSidebarRight,
+  IconSidebarToggle,
   PlanIcon,
   SearchIcon,
 } from "../../../components/ui/icons"
@@ -29,6 +34,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "../../../components/ui/popover"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../../../components/ui/tooltip"
+import { Kbd } from "../../../components/ui/kbd"
 import { cn } from "../../../lib/utils"
 import {
   agentsDebugModeAtom,
@@ -123,11 +134,15 @@ const agents = [
 interface NewChatFormProps {
   isMobileFullscreen?: boolean
   onBackToChats?: () => void
+  onOpenRightPanel?: () => void
+  rightPanelMode?: "closed" | "chat" | "terminal"
 }
 
 export function NewChatForm({
   isMobileFullscreen = false,
   onBackToChats,
+  onOpenRightPanel,
+  rightPanelMode = "closed",
 }: NewChatFormProps = {}) {
   // UNCONTROLLED: just track if editor has content for send button
   const [hasContent, setHasContent] = useState(false)
@@ -1006,7 +1021,7 @@ export function NewChatForm({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header - Simple burger on mobile, AgentsHeaderControls on desktop */}
+      {/* Header - Simple burger on mobile, full header controls on desktop */}
       <div className="flex-shrink-0 flex items-center justify-between bg-background p-1.5">
         <div className="flex-1 min-w-0 flex items-center gap-2">
           {isMobileFullscreen ? (
@@ -1028,6 +1043,117 @@ export function NewChatForm({
             />
           )}
         </div>
+        {/* Right side buttons - only on desktop */}
+        {!isMobileFullscreen && (
+          <div className="flex items-center gap-1">
+            {/* New chat button - disabled since already on new chat */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled
+                  className="h-6 w-6 p-0 text-muted-foreground flex-shrink-0 rounded-md cursor-not-allowed"
+                  aria-label="New chat"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                New chat
+                <Kbd>⌘N</Kbd>
+              </TooltipContent>
+            </Tooltip>
+
+            {/* History button - disabled since no history yet */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled
+                  className="h-6 w-6 p-0 text-muted-foreground flex-shrink-0 rounded-md cursor-not-allowed"
+                  aria-label="Chat history"
+                >
+                  <ClockIcon className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Search chats
+                <Kbd>/</Kbd>
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Diff button - disabled since no changes */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled
+                  className="h-6 w-6 p-0 text-muted-foreground flex-shrink-0 rounded-md cursor-not-allowed"
+                  aria-label="View changes"
+                >
+                  <DiffIcon className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                No changes
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Terminal button */}
+            {onOpenRightPanel && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      if (rightPanelMode !== "terminal") {
+                        onOpenRightPanel()
+                      }
+                    }}
+                    className={cn(
+                      "h-6 w-6 p-0 hover:bg-foreground/10 transition-colors flex-shrink-0 rounded-md",
+                      rightPanelMode === "terminal" ? "text-foreground bg-foreground/10" : "text-foreground"
+                    )}
+                    aria-label="Open terminal"
+                  >
+                    <TerminalSquare className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Open terminal
+                  <Kbd>⌘J</Kbd>
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Right panel toggle */}
+            {onOpenRightPanel && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onOpenRightPanel}
+                    className={cn(
+                      "h-6 w-6 p-0 hover:bg-foreground/10 transition-colors flex-shrink-0 rounded-md",
+                      rightPanelMode !== "closed" ? "text-foreground bg-foreground/10" : "text-foreground"
+                    )}
+                    aria-label={rightPanelMode === "closed" ? "Open right panel" : "Close right panel"}
+                  >
+                    <IconSidebarToggle className="h-4 w-4 scale-x-[-1]" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {rightPanelMode === "closed" ? "Open right panel" : "Close right panel"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-1 items-center justify-center overflow-y-auto relative">

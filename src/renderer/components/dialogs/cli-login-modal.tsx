@@ -8,56 +8,70 @@ import {
   AlertDialogCancel,
 } from "../ui/alert-dialog"
 import { X, ExternalLink, RefreshCw } from "lucide-react"
-import { IconSpinner } from "../ui/icons"
+import { IconSpinner, CursorIcon, GitHubLogo } from "../ui/icons"
 import { Button } from "../ui/button"
-import { Logo } from "../ui/logo"
 import { cliLoginModalAtom } from "../../lib/atoms"
 import { pendingAuthRetryMessageAtom } from "../../features/agents/atoms"
 import { appStore } from "../../lib/jotai-store"
+import { trpc } from "../../lib/trpc"
 
 type AuthFlowState =
   | { step: "idle" }
   | { step: "launching" }
-  | { step: "waiting" }
+  | { step: "waiting"; oauthUrl?: string }
   | { step: "checking" }
   | { step: "success" }
   | { step: "error"; message: string }
 
 // CLI-specific configuration
 const CLI_CONFIG = {
+  cursor: {
+    name: "Cursor",
+    description: "Connect your Cursor subscription to continue",
+    color: "#000000",
+    iconType: "cursor" as const,
+  },
+  copilot: {
+    name: "GitHub Copilot",
+    description: "Connect your GitHub Copilot subscription to continue",
+    color: "#000000",
+    iconType: "github" as const,
+  },
+  codex: {
+    name: "OpenAI Codex",
+    description: "Connect your OpenAI account to continue",
+    color: "#10a37f",
+    iconType: "codex" as const,
+  },
   amp: {
     name: "AMP",
-    loginCommand: "amp login",
     description: "Connect your AMP account to continue",
-    checkCommand: "amp threads list",
-    color: "#6366f1", // Indigo
-    icon: "⚡",
+    color: "#6366f1",
+    iconType: "emoji" as const,
+    emoji: "⚡",
   },
   droid: {
     name: "Droid",
-    loginCommand: "droid",
     description: "Connect your Factory AI account to continue",
-    checkCommand: "droid exec --help",
-    color: "#10b981", // Emerald
-    icon: "🤖",
-  },
-  cursor: {
-    name: "Cursor",
-    loginCommand: "cursor --login",
-    description: "Connect your Cursor subscription to continue",
-    checkCommand: "cursor --version",
-    color: "#f59e0b", // Amber
-    icon: "📝",
+    color: "#10b981",
+    iconType: "emoji" as const,
+    emoji: "🤖",
   },
   opencode: {
     name: "OpenCode",
-    loginCommand: "opencode auth login",
     description: "Connect your OpenCode account to continue",
-    checkCommand: "opencode auth status",
-    color: "#3b82f6", // Blue
-    icon: "🔓",
+    color: "#3b82f6",
+    iconType: "emoji" as const,
+    emoji: "🔓",
   },
 } as const
+
+// Codex/OpenAI icon
+const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08-4.778 2.758a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
+  </svg>
+)
 
 export function CliLoginModal() {
   const [state, setState] = useAtom(cliLoginModalAtom)
@@ -66,6 +80,16 @@ export function CliLoginModal() {
 
   const cli = state.cli
   const config = cli ? CLI_CONFIG[cli] : null
+
+  // tRPC mutations
+  const startCursorAuth = trpc.cliAuth.startCursorAuth.useMutation()
+  const startCopilotAuth = trpc.cliAuth.startCopilotAuth.useMutation()
+  const startCodexAuth = trpc.cliAuth.startCodexAuth.useMutation()
+  const openAuthUrl = trpc.cliAuth.openAuthUrl.useMutation()
+  const checkAuthQuery = trpc.cliAuth.checkAuthStatus.useQuery(
+    { cli: cli as "cursor" | "copilot" | "codex" },
+    { enabled: false }
+  )
 
   // Reset state when modal closes
   useEffect(() => {
@@ -105,30 +129,43 @@ export function CliLoginModal() {
     }
   }
 
-  // Check auth status by running a simple CLI command
-  const checkAuthStatus = async (): Promise<boolean> => {
-    if (!cli || !config) return false
-    
-    try {
-      // Use the desktopApi to run a command and check if it succeeds
-      const result = await window.desktopApi.runCommand(config.checkCommand)
-      // If the command succeeds without auth error, user is authenticated
-      return result.exitCode === 0 && !result.stderr?.toLowerCase().includes("auth")
-    } catch {
-      return false
-    }
-  }
-
   const handleLoginClick = async () => {
     if (!cli || !config) return
 
     setFlowState({ step: "launching" })
 
     try {
-      // Open the login command - this will open the browser for OAuth
-      await window.desktopApi.openLoginFlow(cli)
+      let result: { oauthUrl?: string | null; needsManualAuth?: boolean; alreadyAuthenticated?: boolean }
       
-      setFlowState({ step: "waiting" })
+      // Start the appropriate auth flow
+      if (cli === "cursor") {
+        result = await startCursorAuth.mutateAsync()
+      } else if (cli === "copilot") {
+        result = await startCopilotAuth.mutateAsync()
+      } else if (cli === "codex") {
+        result = await startCodexAuth.mutateAsync()
+      } else {
+        throw new Error(`Unsupported CLI: ${cli}`)
+      }
+      
+      console.log(`[CliLoginModal] ${cli} auth result:`, result)
+      
+      // If already authenticated, success!
+      if (result.alreadyAuthenticated) {
+        setFlowState({ step: "success" })
+        setTimeout(() => {
+          triggerAuthRetry()
+          setState({ open: false, cli: null })
+        }, 1000)
+        return
+      }
+      
+      // Open the OAuth URL in browser
+      if (result.oauthUrl) {
+        await openAuthUrl.mutateAsync({ url: result.oauthUrl })
+      }
+      
+      setFlowState({ step: "waiting", oauthUrl: result.oauthUrl || undefined })
 
       // Start polling for auth completion
       let attempts = 0
@@ -136,33 +173,35 @@ export function CliLoginModal() {
 
       pollIntervalRef.current = setInterval(async () => {
         attempts++
-        setFlowState({ step: "checking" })
-
-        const isAuthenticated = await checkAuthStatus()
         
-        if (isAuthenticated) {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current)
-            pollIntervalRef.current = null
-          }
-          setFlowState({ step: "success" })
+        try {
+          const status = await checkAuthQuery.refetch()
           
-          // Wait a moment to show success, then close and retry
-          setTimeout(() => {
-            triggerAuthRetry()
-            setState({ open: false, cli: null })
-          }, 1000)
-        } else if (attempts >= maxAttempts) {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current)
-            pollIntervalRef.current = null
+          if (status.data?.isAuthenticated) {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current)
+              pollIntervalRef.current = null
+            }
+            setFlowState({ step: "success" })
+            
+            // Wait a moment to show success, then close and retry
+            setTimeout(() => {
+              triggerAuthRetry()
+              setState({ open: false, cli: null })
+            }, 1000)
+          } else if (attempts >= maxAttempts) {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current)
+              pollIntervalRef.current = null
+            }
+            // Keep waiting state - user can manually click "I've logged in"
           }
-          setFlowState({ step: "waiting" })
-        } else {
-          setFlowState({ step: "waiting" })
+        } catch (err) {
+          console.error(`[CliLoginModal] Error checking auth status:`, err)
         }
       }, 2000) // Check every 2 seconds
     } catch (err) {
+      console.error(`[CliLoginModal] Error starting auth:`, err)
       setFlowState({
         step: "error",
         message: err instanceof Error ? err.message : "Failed to start authentication",
@@ -172,15 +211,20 @@ export function CliLoginModal() {
 
   const handleRetryCheck = async () => {
     setFlowState({ step: "checking" })
-    const isAuthenticated = await checkAuthStatus()
     
-    if (isAuthenticated) {
-      setFlowState({ step: "success" })
-      setTimeout(() => {
-        triggerAuthRetry()
-        setState({ open: false, cli: null })
-      }, 1000)
-    } else {
+    try {
+      const status = await checkAuthQuery.refetch()
+      
+      if (status.data?.isAuthenticated) {
+        setFlowState({ step: "success" })
+        setTimeout(() => {
+          triggerAuthRetry()
+          setState({ open: false, cli: null })
+        }, 1000)
+      } else {
+        setFlowState({ step: "waiting" })
+      }
+    } catch {
       setFlowState({ step: "waiting" })
     }
   }
@@ -202,6 +246,22 @@ export function CliLoginModal() {
   const isWaiting = flowState.step === "waiting"
   const isSuccess = flowState.step === "success"
 
+  // Render the appropriate icon based on CLI type
+  const renderIcon = () => {
+    switch (config.iconType) {
+      case "cursor":
+        return <CursorIcon className="w-8 h-8 text-white" />
+      case "github":
+        return <GitHubLogo className="w-8 h-8 text-white" />
+      case "codex":
+        return <CodexIcon className="w-8 h-8 text-white" />
+      case "emoji":
+        return <span className="text-2xl">{(config as any).emoji}</span>
+      default:
+        return null
+    }
+  }
+
   return (
     <AlertDialog open={state.open} onOpenChange={handleOpenChange}>
       <AlertDialogContent className="w-[380px] p-6">
@@ -212,18 +272,13 @@ export function CliLoginModal() {
         </AlertDialogCancel>
 
         <div className="space-y-8">
-          {/* Header with icons */}
+          {/* Header with single icon */}
           <div className="text-center space-y-4">
-            <div className="flex items-center justify-center gap-2 p-2 mx-auto w-max rounded-full border border-border">
-              <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center">
-                <Logo className="w-5 h-5" fill="white" />
-              </div>
-              <div 
-                className="w-10 h-10 rounded-full flex items-center justify-center text-xl"
-                style={{ backgroundColor: config.color }}
-              >
-                {config.icon}
-              </div>
+            <div 
+              className="flex items-center justify-center p-4 mx-auto w-max rounded-full"
+              style={{ backgroundColor: config.color }}
+            >
+              {renderIcon()}
             </div>
             <div className="space-y-1">
               <h1 className="text-base font-semibold tracking-tight">
@@ -240,8 +295,7 @@ export function CliLoginModal() {
             {/* Initial state - Login button */}
             {flowState.step === "idle" && (
               <Button onClick={handleLoginClick} className="w-full">
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Open {config.name} Login
+                Connect
               </Button>
             )}
 
@@ -267,9 +321,6 @@ export function CliLoginModal() {
                     I've logged in
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground text-center">
-                  Or run <code className="px-1 py-0.5 bg-muted rounded">{config.loginCommand}</code> in your terminal
-                </p>
               </div>
             )}
 

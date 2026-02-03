@@ -115,11 +115,13 @@ export const AgentThinkingTool = memo(function AgentThinkingTool({
             )}
           >
             {/* Markdown content */}
-            <ChatMarkdownRenderer
-              content={thinkingText}
-              size="sm"
-              className="text-muted-foreground"
-            />
+              <ChatMarkdownRenderer
+                content={thinkingText}
+                size="sm"
+                className="text-muted-foreground"
+                renderMarkdown={!isStreaming}
+                syntaxHighlight={!isStreaming}
+              />
             {/* Blinking cursor when streaming */}
             {isStreaming && (
               <span className="inline-block w-1 h-3 bg-muted-foreground/50 ml-0.5 animate-pulse" />

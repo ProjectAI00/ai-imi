@@ -1,7 +1,7 @@
 "use client"
 
 import { Button } from "../../../components/ui/button"
-import { AlignJustify } from "lucide-react"
+import { IconSidebarToggle } from "../../../components/ui/icons"
 import {
   Tooltip,
   TooltipContent,
@@ -23,9 +23,7 @@ export function AgentsHeaderControls({
   hasUnseenChanges = false,
   isSubChatsSidebarOpen = false,
 }: AgentsHeaderControlsProps) {
-  if (isSidebarOpen) {
-    return null
-  }
+  const label = isSidebarOpen ? "Close sidebar" : "Open sidebar"
   return (
     <TooltipProvider>
       <Tooltip delayDuration={500}>
@@ -34,10 +32,10 @@ export function AgentsHeaderControls({
             variant="ghost"
             size="icon"
             onClick={onToggleSidebar}
-            className="h-6 w-6 p-0 hover:bg-transparent text-foreground flex-shrink-0 rounded-none relative border-0 shadow-none"
-            aria-label="Open sidebar"
+            className="h-7 w-7 p-0 hover:bg-transparent text-foreground flex-shrink-0 rounded-none relative border-0 shadow-none"
+            aria-label={label}
           >
-            <AlignJustify className="h-4 w-4 relative z-10" />
+            <IconSidebarToggle className="h-4 w-4 relative z-10" />
             {/* Unseen changes indicator */}
             {hasUnseenChanges && (
               <div className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-[#307BD0] ring-2 ring-background z-20" />
@@ -45,7 +43,7 @@ export function AgentsHeaderControls({
           </Button>
         </TooltipTrigger>
         <TooltipContent>
-          Open sidebar
+          {label}
           <Kbd>⌘\</Kbd>
         </TooltipContent>
       </Tooltip>

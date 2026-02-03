@@ -262,6 +262,8 @@ interface TerminalTabsProps {
   onCloseTerminalsToRight: (id: string) => void
   onCreateTerminal: () => void
   onRenameTerminal: (id: string, name: string) => void
+  /** Optional callback to close the terminal sidebar */
+  onCloseSidebar?: () => void
 }
 
 export const TerminalTabs = memo(function TerminalTabs({
@@ -276,6 +278,7 @@ export const TerminalTabs = memo(function TerminalTabs({
   onCloseTerminalsToRight,
   onCreateTerminal,
   onRenameTerminal,
+  onCloseSidebar,
 }: TerminalTabsProps) {
   const tabsContainerRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
@@ -468,7 +471,7 @@ export const TerminalTabs = memo(function TerminalTabs({
         })}
       </div>
 
-      {/* Plus button - absolute positioned on right with gradient cover */}
+      {/* Plus button and close button - absolute positioned on right with gradient cover */}
       <div
         className="absolute right-0 top-0 bottom-0 flex items-center z-20"
         style={{
@@ -486,7 +489,7 @@ export const TerminalTabs = memo(function TerminalTabs({
           }}
         />
         <div
-          className="h-full flex items-center pr-1"
+          className="h-full flex items-center gap-0.5 pr-1"
           style={{ backgroundColor: terminalBg }}
         >
           <Tooltip>
@@ -503,6 +506,22 @@ export const TerminalTabs = memo(function TerminalTabs({
             </TooltipTrigger>
             <TooltipContent side="bottom">New terminal</TooltipContent>
           </Tooltip>
+          {onCloseSidebar && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onCloseSidebar}
+                  className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] rounded-md"
+                  aria-label="Close terminal panel"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Close panel<span className="ml-1.5 text-muted-foreground">⌘J</span></TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
     </div>

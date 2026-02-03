@@ -14,6 +14,7 @@ export function RightPanelChat() {
   const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
   const { messages } = useChat({
     id: activeSubChatId || selectedChatId || "empty",
+    experimental_throttle: 120,
   })
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 

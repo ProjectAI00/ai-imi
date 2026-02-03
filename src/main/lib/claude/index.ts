@@ -8,6 +8,7 @@ export {
 export {
   buildClaudeEnv,
   getClaudeShellEnvironment,
+  preloadClaudeEnv,
   clearClaudeEnvCache,
   logClaudeEnv,
   getBundledClaudeBinaryPath,

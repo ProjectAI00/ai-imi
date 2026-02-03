@@ -97,11 +97,13 @@ function CodeBlock({
   children,
   themeId,
   size = "md",
+  syntaxHighlight = true,
 }: {
   language?: string
   children: string
   themeId: string
   size?: "sm" | "md" | "lg"
+  syntaxHighlight?: boolean
 }) {
   const [copied, setCopied] = useState(false)
   const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null)
@@ -113,10 +115,14 @@ function CodeBlock({
   }, [children])
 
   // Only use Shiki for known programming languages, not for plaintext/ASCII art
-  const shouldHighlight = language && language !== "plaintext" && language !== "text"
+  const shouldHighlight =
+    syntaxHighlight && language && language !== "plaintext" && language !== "text"
 
   useEffect(() => {
-    if (!shouldHighlight) return
+    if (!shouldHighlight) {
+      setHighlightedHtml(null)
+      return
+    }
 
     let cancelled = false
 
@@ -202,6 +208,8 @@ interface ChatMarkdownRendererProps {
   className?: string
   /** Whether to enable syntax highlighting (default: true) */
   syntaxHighlight?: boolean
+  /** Whether to render markdown (default: true). */
+  renderMarkdown?: boolean
 }
 
 // Size-based styles inspired by Notion's spacing
@@ -312,6 +320,7 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
   size = "md",
   className,
   syntaxHighlight = true,
+  renderMarkdown = true,
 }: ChatMarkdownRendererProps) {
   const codeTheme = useCodeTheme()
   const styles = sizeStyles[size]
@@ -453,6 +462,7 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
             language={language}
             themeId={codeTheme}
             size={size}
+            syntaxHighlight={syntaxHighlight}
           >
             {String(children).replace(/\n$/, "")}
           </CodeBlock>
@@ -462,19 +472,27 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
     [styles, codeTheme, syntaxHighlight, size],
   )
 
-  const processedContent = stripTrailingModelSuffix(
-    fixNumberedListSpacing(
-      fixInlineTokenSpacing(
-        fixMalformedEmphasis(
-          fixNumberedListBreaks(
-            addSentenceBreaks(
-              stripEmojis(content).replace(/ {2,}/g, " ").trim(),
-            ),
-          ),
+  const processedContent = useMemo(() => {
+    const sanitized = stripEmojis(content).replace(/ {2,}/g, " ").trim()
+    if (!renderMarkdown) {
+      return sanitized
+    }
+    return stripTrailingModelSuffix(
+      fixNumberedListSpacing(
+        fixInlineTokenSpacing(
+          fixMalformedEmphasis(fixNumberedListBreaks(addSentenceBreaks(sanitized))),
         ),
       ),
-    ),
-  )
+    )
+  }, [content, renderMarkdown])
+
+  if (!renderMarkdown) {
+    return (
+      <div className={cn("text-sm whitespace-pre-wrap break-words", className)}>
+        {processedContent}
+      </div>
+    )
+  }
 
   return (
     <div

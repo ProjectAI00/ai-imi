@@ -36,25 +36,31 @@ import { publicProcedure, router } from "../index"
 // Regex to match file mentions in text: @[file:local:/path/to/file] or @[folder:local:/path/to/folder]
 const FILE_MENTION_REGEX = /@\[(file|folder):local:([^\]]+)\]/g
 
+interface FileMention {
+  path: string
+  type: "file" | "folder"
+}
+
 /**
  * Parse file mentions from prompt text and extract absolute file paths
- * Returns array of file paths that need to be read
+ * Returns array of file paths with their type (file or folder)
  */
-function extractFileMentionsFromText(text: string): string[] {
-  const paths: string[] = []
+function extractFileMentionsFromText(text: string): FileMention[] {
+  const mentions: FileMention[] = []
   let match
   
   while ((match = FILE_MENTION_REGEX.exec(text)) !== null) {
-    const filePath = match[2] // The path part after "file:local:" or "folder:local:"
+    const type = match[1] as "file" | "folder"
+    const filePath = match[2]
     if (filePath) {
-      paths.push(filePath)
+      mentions.push({ path: filePath, type })
     }
   }
   
   // Reset regex state
   FILE_MENTION_REGEX.lastIndex = 0
   
-  return paths
+  return mentions
 }
 
 // Register CLI adapters
@@ -169,7 +175,14 @@ export const claudeRouter = router({
       }),
     )
     .subscription(({ input }) => {
+      const subscriptionStart = Date.now()
+      const subId = input.subChatId.slice(-8)
+      console.log(`[SD] M:SUB_START sub=${subId} cli=${input.cli} t=0ms`)
+      
       return observable<UIMessageChunk>((emit) => {
+        const elapsed = () => `${Date.now() - subscriptionStart}ms`
+        console.log(`[SD] M:OBSERVABLE_CREATED sub=${subId} t=${elapsed()}`)
+        
         // Helper to emit error as both text (for display) and error chunk (for toast)
         const emitCliError = (errorText: string, category: string, cli: string) => {
           const errorId = `cli-error-${Date.now()}`
@@ -199,8 +212,10 @@ export const claudeRouter = router({
 
           // Pre-check: Verify CLI is available before spawning
           ; (async () => {
+            console.log(`[SD] M:ADAPTER_ASYNC_START sub=${subId} t=${elapsed()}`)
             try {
               const isAvailable = await adapter.isAvailable()
+              console.log(`[SD] M:ADAPTER_AVAILABLE sub=${subId} isAvailable=${isAvailable} t=${elapsed()}`)
               if (!isAvailable) {
                 const cliName = input.cli === "cursor" ? "Cursor" : input.cli === "opencode" ? "OpenCode" : input.cli === "copilot" ? "GitHub Copilot" : input.cli
                 const installGuide = input.cli === "cursor"
@@ -239,28 +254,28 @@ export const claudeRouter = router({
               }
 
               // Extract file mentions from prompt text (e.g., @[file:local:/path/to/file])
-              const mentionedFilePaths = extractFileMentionsFromText(input.prompt)
-              console.log(`[CLI] Found ${mentionedFilePaths.length} file mentions in prompt`)
+              const mentionedFiles = extractFileMentionsFromText(input.prompt)
+              console.log(`[CLI] Found ${mentionedFiles.length} file mentions in prompt`)
 
               // Read file contents from both explicit attachments and text mentions
               // This ensures CLI tools can access file content even from restricted directories (iCloud, etc.)
-              console.log(`[CLI] Processing files for adapter:`, input.files?.length || 0, "explicit files,", mentionedFilePaths.length, "mentioned files")
+              console.log(`[CLI] Processing files for adapter:`, input.files?.length || 0, "explicit files,", mentionedFiles.length, "mentioned files")
               
               // Build set of paths already in explicit files to avoid duplicates
               const explicitFilePaths = new Set(input.files?.map(f => f.path) || [])
               
               // Combine explicit file attachments with mentioned files
-              const allFilesToRead: { path: string; filename?: string }[] = [
-                ...(input.files || []),
-                ...mentionedFilePaths
-                  .filter(p => !explicitFilePaths.has(p)) // Skip duplicates
-                  .map(p => ({ path: p, filename: p.split("/").pop() || "file" }))
+              const allFilesToRead: { path: string; filename?: string; type?: "file" | "folder" }[] = [
+                ...(input.files || []).map(f => ({ ...f, type: "file" as const })),
+                ...mentionedFiles
+                  .filter(m => !explicitFilePaths.has(m.path)) // Skip duplicates
+                  .map(m => ({ path: m.path, filename: m.path.split("/").pop() || "file", type: m.type }))
               ]
               
               const fileAttachmentText = allFilesToRead.length
-                ? allFilesToRead
-                    .map((file) => {
-                      console.log(`[CLI] Processing file:`, file.path)
+                ? (await Promise.all(
+                    allFilesToRead.map(async (file) => {
+                      console.log(`[CLI] Processing ${file.type || 'file'}:`, file.path)
                       const label = file.filename || file.path.split("/").pop() || "file"
                       let content = ""
                       try {
@@ -269,8 +284,26 @@ export const claudeRouter = router({
                           console.warn(`[CLI] Skipping non-absolute file path: ${file.path}`)
                           return null
                         }
+                        
+                        // Check if it's a directory
+                        const stats = await fs.promises.stat(file.path)
+                        if (stats.isDirectory()) {
+                          // For directories, list the contents instead of reading
+                          console.log(`[CLI] Listing directory contents: ${file.path}`)
+                          const entries = await fs.promises.readdir(file.path, { withFileTypes: true })
+                          const fileList = entries
+                            .slice(0, 100) // Limit to 100 entries
+                            .map(entry => `${entry.isDirectory() ? '📁' : '📄'} ${entry.name}`)
+                            .join('\n')
+                          content = `Directory contents (${entries.length} items):\n${fileList}`
+                          if (entries.length > 100) {
+                            content += `\n... and ${entries.length - 100} more items`
+                          }
+                          return `--- Attached folder: ${label} ---\nPath: ${file.path}\n\n${content}\n--- End of ${label} ---`
+                        }
+                        
                         // Read file content directly - Electron has access even to iCloud directories
-                        const fileContent = fs.readFileSync(file.path, "utf-8")
+                        const fileContent = await fs.promises.readFile(file.path, "utf-8")
                         // Limit content to prevent massive prompts (100KB max per file)
                         const maxSize = 100 * 1024
                         content = fileContent.length > maxSize 
@@ -283,6 +316,7 @@ export const claudeRouter = router({
                       }
                       return `--- Attached file: ${label} ---\nPath: ${file.path}\n\n${content}\n--- End of ${label} ---`
                     })
+                  ))
                     .filter(Boolean)
                     .join("\n\n")
                 : ""
@@ -327,7 +361,7 @@ export const claudeRouter = router({
               
               // Collect all mentioned files for pre-fill
               const allMentionedFiles = [
-                ...mentionedFilePaths,
+                ...mentionedFiles.map(m => m.path),
                 ...(input.files?.map(f => f.path) || [])
               ]
               console.log(`[CLI] Pre-fill context: mode=${input.mode}, workspacePath=${workspacePath}, files=${allMentionedFiles.length}`)
@@ -383,16 +417,34 @@ export const claudeRouter = router({
                 sessionId: input.sessionId || existingSessionId,
               }
 
+              console.log(`[SD] M:ADAPTER_START sub=${subId} t=${elapsed()}`)
               const subscription = adapter.chat(chatInput)
+              console.log(`[SD] M:ADAPTER_RETURNED sub=${subId} t=${elapsed()}`)
 
-              // Track assistant response
+              // Track assistant response - both text AND tool calls
               let assistantText = ""
+              const assistantParts: Array<{
+                type: string
+                text?: string
+                toolCallId?: string
+                toolName?: string
+                input?: any
+                result?: any
+                state?: string
+              }> = []
               let textStartEmitted = false
               const textId = `cli-text-${Date.now()}`
               let currentSessionId: string | undefined
+              let firstChunkEmitted = false
 
               subscription.subscribe({
                 next: (chunk) => {
+                  // Log first chunk to trace latency
+                  if (!firstChunkEmitted) {
+                    firstChunkEmitted = true
+                    console.log(`[SD] M:FIRST_EMIT sub=${subId} type=${chunk.type} t=${elapsed()}`)
+                  }
+                  
                   // Save session ID for future resume
                   if (chunk.type === "session-id" && chunk.sessionId) {
                     console.log(`[CLI] Saving session ID for resume: ${chunk.sessionId}`)
@@ -406,40 +458,75 @@ export const claudeRouter = router({
                   if (chunk.type === "text-delta" && chunk.delta) {
                     assistantText += chunk.delta
                   }
-                  // If we get an error chunk, ALSO emit it as a text-delta so it shows in the UI
-                  if (chunk.type === "error" && chunk.errorText) {
-                    const errorMsg = chunk.errorText
-                    assistantText += errorMsg // Add to accumulated text for saving
-                    // Emit text-start if not already emitted
-                    if (!textStartEmitted) {
-                      emit.next({ type: "text-start", id: textId })
-                      textStartEmitted = true
-                    }
-                    emit.next({
-                      type: "text-delta",
-                      id: textId,
-                      delta: errorMsg
+                  // Capture tool calls for persistence
+                  if (chunk.type === "tool-input-available") {
+                    console.log(`[CLI] Tool call: ${chunk.toolName} (${chunk.toolCallId})`)
+                    assistantParts.push({
+                      type: `tool-${chunk.toolName}`,
+                      toolCallId: chunk.toolCallId,
+                      toolName: chunk.toolName,
+                      input: chunk.input,
+                      state: "call",
                     })
                   }
-                  emit.next(chunk)
+                  // Capture tool outputs
+                  if (chunk.type === "tool-output-available") {
+                    console.log(`[CLI] Tool output: ${chunk.toolCallId}`)
+                    const toolPart = assistantParts.find(
+                      (p) => p.type?.startsWith("tool-") && p.toolCallId === chunk.toolCallId
+                    )
+                    if (toolPart) {
+                      toolPart.result = chunk.output
+                      toolPart.state = "result"
+                    }
+                  }
+                  // If we get an error chunk, ALSO emit it as a text-delta so it shows in the UI
+                    if (chunk.type === "error" && chunk.errorText) {
+                      const errorMsg = chunk.errorText
+                      assistantText += errorMsg // Add to accumulated text for saving
+                      // Emit text-start if not already emitted
+                      if (!textStartEmitted) {
+                        emit.next({ type: "text-start", id: textId })
+                        textStartEmitted = true
+                      }
+                      emit.next({
+                        type: "text-delta",
+                        id: textId,
+                        delta: errorMsg
+                      })
+                    }
+                    // Log chunk forwarding (not every text-delta to avoid spam)
+                    if (chunk.type !== "text-delta" || Math.random() < 0.1) {
+                      console.log(`[SD] M:FWD_CHUNK sub=${subId} type=${chunk.type} t=${elapsed()}`)
+                    }
+                    emit.next(chunk)
                 },
                 error: (err) => {
                   emit.next({ type: "error", errorText: String(err) })
-                  emit.next({ type: "finish" })
-                  emit.complete()
+                  // Don't emit finish/complete here - adapter already did
                 },
                 complete: () => {
-                  // Save assistant message
-                  if (assistantText) {
-                    console.log(`[CLI] Stream complete. Mode: ${input.mode}, Text length: ${assistantText.length}`)
+                  console.log(`[SD] M:ADAPTER_COMPLETE sub=${subId} t=${elapsed()}`)
+                  // Adapter already emitted finish/complete, just do DB saving
+                  // Save assistant message (include both text and tool calls)
+                  const hasContent = assistantText || assistantParts.length > 0
+                  if (hasContent) {
+                    console.log(`[CLI] Stream complete. Mode: ${input.mode}, Text length: ${assistantText.length}, Tool calls: ${assistantParts.length}`)
                     console.log(`[CLI] Checking for goal/tasks blocks...`)
                     console.log(`[CLI] Has goal block: ${assistantText.includes('\`\`\`goal')}`)
                     console.log(`[CLI] Has tasks block: ${assistantText.includes('\`\`\`tasks')}`)
                     
+                    // Build parts array: text first, then tool calls
+                    const finalParts: Array<any> = []
+                    if (assistantText) {
+                      finalParts.push({ type: "text", text: assistantText })
+                    }
+                    finalParts.push(...assistantParts)
+                    
                     const assistantMessage = {
                       id: crypto.randomUUID(),
                       role: "assistant",
-                      parts: [{ type: "text", text: assistantText }],
+                      parts: finalParts,
                       metadata: currentSessionId ? { sessionId: currentSessionId } : undefined,
                     }
                     const finalMessages = [...messagesToSave, assistantMessage]
@@ -598,8 +685,9 @@ export const claudeRouter = router({
                         .catch((err) => console.error(`[CLI] Failed to handle task completion:`, err))
                     }
                   }
-                  emit.next({ type: "finish" })
-                  emit.complete()
+                  console.log(`[SD] M:ADAPTER_COMPLETE_DONE sub=${subId} t=${elapsed()}`)
+                  // Don't emit finish/complete - adapter already did that
+                  // This just saves to DB after the stream completed
                 },
               })
             } catch (error) {
@@ -620,7 +708,6 @@ export const claudeRouter = router({
         activeSessions.set(input.subChatId, abortController)
 
         // Stream debug logging
-        const subId = input.subChatId.slice(-8) // Short ID for logs
         const streamStart = Date.now()
         let chunkCount = 0
         let lastChunkType = ""
@@ -632,6 +719,7 @@ export const claudeRouter = router({
         let isObservableActive = true
 
         // Helper to safely emit (no-op if already unsubscribed)
+        // Emit immediately without batching for lowest latency
         const safeEmit = (chunk: UIMessageChunk) => {
           if (!isObservableActive) return false
           try {
@@ -645,6 +733,11 @@ export const claudeRouter = router({
 
         // Helper to safely complete (no-op if already closed)
         const safeComplete = () => {
+          if (textDeltaFlushTimeout) {
+            clearTimeout(textDeltaFlushTimeout)
+            textDeltaFlushTimeout = null
+          }
+          flushTextDeltas()
           try {
             emit.complete()
           } catch {
@@ -775,14 +868,43 @@ export const claudeRouter = router({
                 const messageContent: any[] = []
 
                 if (hasFiles) {
+                  // Read file contents, handling directories specially
+                  const fileContents = (await Promise.all(
+                    input.files.map(async (file) => {
+                      const label = file.filename || file.path.split("/").pop() || "file"
+                      try {
+                        const stats = await fs.promises.stat(file.path)
+                        if (stats.isDirectory()) {
+                          // For directories, list contents
+                          const entries = await fs.promises.readdir(file.path, { withFileTypes: true })
+                          const fileList = entries
+                            .slice(0, 100)
+                            .map(entry => `${entry.isDirectory() ? '📁' : '📄'} ${entry.name}`)
+                            .join('\n')
+                          let content = `Directory contents (${entries.length} items):\n${fileList}`
+                          if (entries.length > 100) {
+                            content += `\n... and ${entries.length - 100} more items`
+                          }
+                          return `--- Attached folder: ${label} ---\nPath: ${file.path}\n\n${content}\n--- End of ${label} ---`
+                        } else {
+                          // Read file content
+                          const content = await fs.promises.readFile(file.path, "utf-8")
+                          const maxSize = 100 * 1024
+                          const truncatedContent = content.length > maxSize
+                            ? content.slice(0, maxSize) + "\n\n[Content truncated - file exceeds 100KB]"
+                            : content
+                          return `--- Attached file: ${label} ---\nPath: ${file.path}\n\n${truncatedContent}\n--- End of ${label} ---`
+                        }
+                      } catch (err) {
+                        return `Attached file: ${label}\nPath: ${file.path}\n[Error reading: ${err instanceof Error ? err.message : 'unknown error'}]`
+                      }
+                    })
+                  ))
+                    .join("\n\n")
+                  
                   messageContent.push({
                     type: "text" as const,
-                    text: input.files
-                      .map((file) => {
-                        const label = file.filename || file.path.split("/").pop() || "file"
-                        return `Attached file: ${label}\nPath: ${file.path}`
-                      })
-                      .join("\n\n"),
+                    text: fileContents,
                   })
                 }
 
@@ -821,7 +943,7 @@ export const claudeRouter = router({
               }
 
               // Build full environment for Claude SDK (includes HOME, PATH, etc.)
-              const claudeEnv = buildClaudeEnv()
+              const claudeEnv = await buildClaudeEnv()
 
               // Debug logging in dev
               if (process.env.NODE_ENV !== "production") {
@@ -1516,6 +1638,11 @@ export const claudeRouter = router({
         return () => {
           console.log(`[SD] M:CLEANUP sub=${subId} sessionId=${currentSessionId || 'none'}`)
           isObservableActive = false // Prevent emit after unsubscribe
+          if (textDeltaFlushTimeout) {
+            clearTimeout(textDeltaFlushTimeout)
+            textDeltaFlushTimeout = null
+          }
+          pendingTextDeltas = []
           abortController.abort()
           activeSessions.delete(input.subChatId)
           clearPendingApprovals("Session ended.", input.subChatId)

@@ -40,8 +40,8 @@ export function AgentsQuickSwitchDialog({
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop */}
-          <div className="fixed inset-0 z-[10000]" />
+          {/* Backdrop - pointer-events-none to not block interactions */}
+          <div className="fixed inset-0 z-[10000] pointer-events-none" />
 
           {/* Dialog */}
           <div className="fixed inset-0 flex items-center justify-center z-[10001] p-4 pointer-events-none">

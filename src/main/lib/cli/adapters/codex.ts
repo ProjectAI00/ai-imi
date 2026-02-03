@@ -222,17 +222,26 @@ export const codexAdapter: CliAdapter = {
             safeEmit({
               type: "error",
               errorText: "Codex CLI not found. Install it with: npm i -g @openai/codex",
-            })
+              debugInfo: {
+                category: "CODEX_NOT_INSTALLED",
+                cli: "codex",
+              },
+            } as UIMessageChunk)
           } else if (isAuthError) {
+            // Emit auth-error type which triggers the login modal in the UI
             safeEmit({
-              type: "error",
-              errorText: "OpenAI API key required. Set OPENAI_API_KEY environment variable.",
-            })
+              type: "auth-error",
+              cli: "codex",
+            } as UIMessageChunk)
           } else {
             safeEmit({
               type: "error",
               errorText: `Codex SDK error: ${errorMessage}`,
-            })
+              debugInfo: {
+                category: "CODEX_ERROR",
+                cli: "codex",
+              },
+            } as UIMessageChunk)
           }
 
           safeEmit({ type: "finish" })

@@ -146,6 +146,27 @@ const ERROR_TOAST_CONFIG: Record<
     title: "GitHub Copilot error",
     description: "An error occurred with Copilot. Check your login and try again.",
   },
+  // Codex CLI errors
+  CODEX_NOT_INSTALLED: {
+    title: "OpenAI Codex not found",
+    description: "Install Codex: npm i -g @openai/codex",
+    action: {
+      label: "Copy command",
+      onClick: () => navigator.clipboard.writeText("npm i -g @openai/codex"),
+    },
+  },
+  CODEX_AUTH_REQUIRED: {
+    title: "OpenAI authentication required",
+    description: "Set OPENAI_API_KEY or run 'codex auth' to authenticate.",
+    action: {
+      label: "Copy command",
+      onClick: () => navigator.clipboard.writeText("codex auth"),
+    },
+  },
+  CODEX_ERROR: {
+    title: "OpenAI Codex error",
+    description: "An error occurred with Codex. Check your API key and try again.",
+  },
 }
 
 type UIMessageChunk = any // Inferred from subscription
@@ -156,7 +177,7 @@ type IPCChatTransportConfig = {
   cwd: string
   mode: "plan" | "agent"
   model?: string
-  cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
+  cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot" | "codex"
   taskId?: string  // Task being executed (for state engine)
   goalId?: string  // Goal being executed (orchestrator mode)
 }
@@ -223,14 +244,19 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
         .allSubChats.find((subChat) => subChat.id === this.config.subChatId)
         ?.mode || this.config.mode
 
-    // Stream debug logging
+    // Stream debug logging with TIMING
     const subId = this.config.subChatId.slice(-8)
     let chunkCount = 0
     let lastChunkType = ""
-    console.log(`[SD] R:START sub=${subId} cli=${currentCli}`)
+    let streamErrored = false  // Track if stream has errored to skip further enqueues
+    const streamStartTime = performance.now()
+    console.log(`[SD] R:START sub=${subId} cli=${currentCli} t=0ms`)
 
     return new ReadableStream({
       start: (controller) => {
+        const elapsed = () => `${(performance.now() - streamStartTime).toFixed(0)}ms`
+        console.log(`[SD] R:STREAM_START sub=${subId} t=${elapsed()}`)
+        
         const setActivity = (text: string | null) => {
           appStore.set(setStreamingActivityAtom, {
             subChatId: this.config.subChatId,
@@ -272,6 +298,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           }
         }
 
+        console.log(`[SD] R:SUB_CREATING sub=${subId} t=${elapsed()}`)
         const sub = trpcClient.claude.chat.subscribe(
           {
             subChatId: this.config.subChatId,
@@ -292,6 +319,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             onData: (chunk: UIMessageChunk) => {
               chunkCount++
               lastChunkType = chunk.type
+              
+              // Log first chunk timing to trace latency
+              if (chunkCount === 1) {
+                console.log(`[SD] R:FIRST_CHUNK sub=${subId} type=${chunk.type} t=${elapsed()}`)
+              }
 
               // Update streaming activity label from tool calls
               const inferred = inferActivityFromTool(chunk)
@@ -359,6 +391,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // Use controller.error() instead of controller.close() so that
                 // the SDK Chat properly resets status from "streaming" to "ready"
                 // This allows user to retry sending messages after failed auth
+                streamErrored = true
                 controller.error(new Error("Authentication required"))
                 return
               }
@@ -416,8 +449,21 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 })
               }
 
+              // Skip enqueue if stream has already errored (e.g., auth error)
+              if (streamErrored) {
+                if (chunk.type === "finish") {
+                  console.log(`[SD] R:FINISH_SKIP sub=${subId} (stream errored) t=${elapsed()}`)
+                  setActivity(null)
+                }
+                return
+              }
+
               // Try to enqueue, but don't crash if stream is already closed
               try {
+                // Log all chunk types for debugging
+                if (chunk.type === "text-start" || chunk.type === "text-delta" || chunk.type === "text-end") {
+                  console.log(`[SD] R:ENQ sub=${subId} type=${chunk.type} n=${chunkCount} t=${elapsed()}`)
+                }
                 controller.enqueue(chunk)
               } catch (e) {
                 // CRITICAL: Log when enqueue fails - this could explain missing chunks!
@@ -425,18 +471,23 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               }
 
               if (chunk.type === "finish") {
-                console.log(`[SD] R:FINISH sub=${subId} n=${chunkCount}`)
+                console.log(`[SD] R:FINISH sub=${subId} n=${chunkCount} t=${elapsed()}`)
                 setActivity(null)
                 try {
                   controller.close()
+                  console.log(`[SD] R:CLOSE_OK sub=${subId} t=${elapsed()}`)
                 } catch {
                   // Already closed
                 }
               }
             },
             onError: (err: Error) => {
-              console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
+              console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} t=${elapsed()} err=${err.message}`)
               setActivity(null)
+              // CRITICAL: Unsubscribe on error to release tRPC subscription
+              console.log(`[SD] R:UNSUB_START sub=${subId} t=${elapsed()}`)
+              sub.unsubscribe()
+              console.log(`[SD] R:UNSUB_DONE sub=${subId} t=${elapsed()}`)
               // Track transport errors in Sentry
               Sentry.captureException(err, {
                 tags: {
@@ -453,8 +504,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               controller.error(err)
             },
             onComplete: () => {
-              console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)
+              console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType} t=${elapsed()}`)
               setActivity(null)
+              // CRITICAL: Unsubscribe to release tRPC subscription and unblock UI
+              console.log(`[SD] R:UNSUB_START sub=${subId} t=${elapsed()}`)
+              sub.unsubscribe()
+              console.log(`[SD] R:UNSUB_DONE sub=${subId} t=${elapsed()}`)
               // Fallback: clear any pending questions when stream completes
               // This handles edge cases where timeout chunk wasn't received
               const pending = appStore.get(pendingUserQuestionsAtom)
@@ -466,16 +521,21 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               }
               try {
                 controller.close()
+                console.log(`[SD] R:CLOSE_OK sub=${subId} t=${elapsed()}`)
               } catch {
                 // Already closed
               }
+              console.log(`[SD] R:COMPLETE_DONE sub=${subId} t=${elapsed()}`)
             },
           },
         )
+        
+        // Log when subscription is established
+        console.log(`[SD] R:SUB_CREATED sub=${subId} t=${elapsed()}`)
 
         // Handle abort
         options.abortSignal?.addEventListener("abort", () => {
-          console.log(`[SD] R:ABORT sub=${subId} n=${chunkCount} last=${lastChunkType}`)
+          console.log(`[SD] R:ABORT sub=${subId} n=${chunkCount} last=${lastChunkType} t=${elapsed()}`)
           sub.unsubscribe()
           trpcClient.claude.cancel.mutate({ subChatId: this.config.subChatId })
           try {

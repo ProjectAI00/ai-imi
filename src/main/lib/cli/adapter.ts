@@ -1,4 +1,5 @@
 import type { CliAdapter, CliAdapterRegistry } from "./types"
+import { preloadCopilotSDK } from "./adapters/copilot"
 
 /** Adapter registry (populated on init) */
 const adapters: CliAdapterRegistry = new Map()
@@ -22,6 +23,17 @@ export function getAdapter(cli: string): CliAdapter | undefined {
  */
 export function getAllAdapters(): CliAdapter[] {
   return Array.from(adapters.values())
+}
+
+/**
+ * Preload CLI SDK(s) that benefit from early initialization.
+ * Called during app startup to avoid first-message latency.
+ */
+export async function preloadCliSDKs(): Promise<void> {
+  // Preload Copilot SDK in parallel (don't await here, let it run in background)
+  preloadCopilotSDK().catch(err => {
+    console.warn("[CLI] Failed to preload Copilot SDK:", err)
+  })
 }
 
 /**

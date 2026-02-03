@@ -295,7 +295,7 @@ export const agentsLoginModalOpenAtom = atom<boolean>(false)
 // CLI Login modal (shown when AMP, Droid, Cursor, etc. auth fails)
 export type CliLoginModalState = {
   open: boolean
-  cli: "amp" | "droid" | "cursor" | "opencode" | null
+  cli: "amp" | "droid" | "cursor" | "opencode" | "copilot" | "codex" | null
 }
 export const cliLoginModalAtom = atom<CliLoginModalState>({
   open: false,

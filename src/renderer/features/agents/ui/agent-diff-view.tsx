@@ -188,7 +188,18 @@ const validateDiffHunk = (
 }
 
 export const splitUnifiedDiffByFile = (diffText: string): ParsedDiffFile[] => {
+  const MAX_DIFF_LINES = 20000
+  const MAX_DIFF_SIZE = 1_500_000
+  if (diffText.length > MAX_DIFF_SIZE) {
+    console.warn(`[diff] skipping parse: size=${diffText.length}`)
+    return []
+  }
   const normalized = diffText.replace(/\r\n/g, "\n")
+  const lineCount = normalized.split("\n").length
+  if (lineCount > MAX_DIFF_LINES) {
+    console.warn(`[diff] skipping parse: lines=${lineCount}`)
+    return []
+  }
   const lines = normalized.split("\n")
 
   const blocks: string[] = []

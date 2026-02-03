@@ -1,15 +1,17 @@
 import { Terminal as XTerm } from "xterm"
 import { FitAddon } from "@xterm/addon-fit"
-import { WebglAddon } from "@xterm/addon-webgl"
-import { CanvasAddon } from "@xterm/addon-canvas"
 import { SerializeAddon } from "@xterm/addon-serialize"
-import { WebLinksAddon } from "@xterm/addon-web-links"
 import type { ITheme } from "xterm"
 import { TERMINAL_OPTIONS, TERMINAL_THEME_DARK, TERMINAL_THEME_LIGHT, getTerminalTheme, RESIZE_DEBOUNCE_MS } from "./config"
 import { FilePathLinkProvider } from "./link-providers"
 import { isMac, isModifierPressed, showLinkPopup, removeLinkPopup } from "./link-providers/link-popup"
 import { suppressQueryResponses } from "./suppressQueryResponses"
 import { debounce } from "./utils"
+
+// Dynamically imported addons - loaded only when needed
+type WebglAddon = import("@xterm/addon-webgl").WebglAddon
+type CanvasAddon = import("@xterm/addon-canvas").CanvasAddon
+type WebLinksAddon = import("@xterm/addon-web-links").WebLinksAddon
 
 /**
  * Get the default terminal background color based on theme.
@@ -22,20 +24,23 @@ export function getDefaultTerminalBg(isDark = true): string {
 /**
  * Load GPU-accelerated renderer with automatic fallback.
  * Tries WebGL first, falls back to Canvas renderer if WebGL fails.
+ * Uses dynamic imports to avoid loading these heavy addons until needed.
  */
-function loadRenderer(xterm: XTerm): { dispose: () => void } {
+async function loadRendererAsync(xterm: XTerm): Promise<{ dispose: () => void }> {
   let renderer: WebglAddon | CanvasAddon | null = null
 
   console.log("[Terminal:loadRenderer] Attempting to load WebGL addon...")
 
   try {
+    const { WebglAddon } = await import("@xterm/addon-webgl")
     const webglAddon = new WebglAddon()
     console.log("[Terminal:loadRenderer] WebglAddon created")
 
-    webglAddon.onContextLoss(() => {
+    webglAddon.onContextLoss(async () => {
       console.log("[Terminal:loadRenderer] WebGL context lost, switching to Canvas")
       webglAddon.dispose()
       try {
+        const { CanvasAddon } = await import("@xterm/addon-canvas")
         renderer = new CanvasAddon()
         xterm.loadAddon(renderer)
         console.log("[Terminal:loadRenderer] Canvas fallback loaded after context loss")
@@ -51,6 +56,7 @@ function loadRenderer(xterm: XTerm): { dispose: () => void } {
     console.log("[Terminal:loadRenderer] WebGL failed:", err)
     // WebGL not available, try Canvas
     try {
+      const { CanvasAddon } = await import("@xterm/addon-canvas")
       renderer = new CanvasAddon()
       xterm.loadAddon(renderer)
       console.log("[Terminal:loadRenderer] Canvas addon loaded as fallback")
@@ -84,6 +90,7 @@ export interface TerminalInstance {
  * Creates and initializes an xterm instance with all addons.
  * Does: create → open → addons → fit
  * This ensures dimensions are ready before PTY creation.
+ * Heavy addons (WebGL, Canvas, WebLinks) are loaded asynchronously to improve initial render.
  */
 export function createTerminalInstance(
   container: HTMLDivElement,
@@ -115,53 +122,23 @@ export function createTerminalInstance(
   const core = (xterm as unknown as { _core?: { _renderService?: unknown } })._core
   console.log("[Terminal:create] After open - _renderService exists:", !!core?._renderService)
 
-  // 3. Load fit addon
+  // 3. Load fit addon (synchronous - needed for initial dimensions)
   console.log("[Terminal:create] Step 3: Loading FitAddon")
   const fitAddon = new FitAddon()
   xterm.loadAddon(fitAddon)
 
-  // 4. Load serialize addon for state persistence
+  // 4. Load serialize addon for state persistence (synchronous - lightweight)
   console.log("[Terminal:create] Step 4: Loading SerializeAddon")
   const serializeAddon = new SerializeAddon()
   xterm.loadAddon(serializeAddon)
 
-  // 5. Load GPU-accelerated renderer
-  console.log("[Terminal:create] Step 5: Loading renderer")
-  const renderer = loadRenderer(xterm)
-
-  // Debug: Check dimensions after renderer
-  const coreAfter = (xterm as unknown as { _core?: { _renderService?: { dimensions?: unknown } } })._core
-  console.log("[Terminal:create] After renderer - dimensions:", coreAfter?._renderService?.dimensions)
-
-  // 6. Set up query response suppression
-  console.log("[Terminal:create] Step 6: Setting up query suppression")
+  // 5. Set up query response suppression (synchronous - lightweight)
+  console.log("[Terminal:create] Step 5: Setting up query suppression")
   const cleanupQuerySuppression = suppressQueryResponses(xterm)
 
-  // 7. Set up URL link provider using official WebLinksAddon
-  if (onUrlClick) {
-    console.log("[Terminal:create] Step 7: Registering WebLinksAddon")
-    const webLinksAddon = new WebLinksAddon(
-      (event: MouseEvent, uri: string) => {
-        // Require Cmd+Click (Mac) or Ctrl+Click (Windows/Linux)
-        if (isModifierPressed(event)) {
-          onUrlClick(uri)
-        }
-      },
-      {
-        hover: (event: MouseEvent, uri: string) => {
-          showLinkPopup(event, uri, onUrlClick)
-        },
-        leave: () => {
-          removeLinkPopup()
-        },
-      }
-    )
-    xterm.loadAddon(webLinksAddon)
-  }
-
-  // 8. Set up file path link provider
+  // 6. Set up file path link provider (synchronous - lightweight)
   if (onFileLinkClick) {
-    console.log("[Terminal:create] Step 8: Registering file path link provider")
+    console.log("[Terminal:create] Step 6: Registering file path link provider")
     const filePathLinkProvider = new FilePathLinkProvider(
       xterm,
       (_event, path, line, column) => {
@@ -172,24 +149,97 @@ export function createTerminalInstance(
     xterm.registerLinkProvider(filePathLinkProvider)
   }
 
-  // 9. Fit to get actual dimensions
-  console.log("[Terminal:create] Step 9: Fitting terminal")
+  // 7. Fit to get actual dimensions (with safety checks)
+  console.log("[Terminal:create] Step 7: Fitting terminal")
   try {
-    fitAddon.fit()
-    console.log("[Terminal:create] Fit successful - cols:", xterm.cols, "rows:", xterm.rows)
+    // Check if container has non-zero dimensions before fitting
+    const containerRect = container.getBoundingClientRect()
+    const xtermElement = xterm.element
+    if (
+      containerRect.width > 0 &&
+      containerRect.height > 0 &&
+      xtermElement &&
+      xtermElement.offsetWidth > 0 &&
+      xtermElement.offsetHeight > 0
+    ) {
+      fitAddon.fit()
+      console.log("[Terminal:create] Fit successful - cols:", xterm.cols, "rows:", xterm.rows)
+    } else {
+      console.log("[Terminal:create] Skipping fit - container or xterm has no dimensions yet")
+    }
   } catch (err) {
     console.log("[Terminal:create] Fit failed:", err)
   }
 
-  console.log("[Terminal:create] Complete!")
+  // Track async cleanup functions and promises
+  let rendererCleanup: (() => void) | null = null
+  let webLinksAddonRef: WebLinksAddon | null = null
+  let isDisposed = false
+
+  // Store promises for async operations to handle cleanup properly
+  let rendererPromise: Promise<{ dispose: () => void }> | null = null
+  let webLinksPromise: Promise<void> | null = null
+
+  // 8. Load GPU-accelerated renderer asynchronously (heavy - WebGL/Canvas)
+  console.log("[Terminal:create] Step 8: Loading renderer asynchronously")
+  rendererPromise = loadRendererAsync(xterm).then((renderer) => {
+    if (isDisposed) {
+      renderer.dispose()
+      return renderer
+    }
+    rendererCleanup = renderer.dispose
+    // Debug: Check dimensions after renderer
+    const coreAfter = (xterm as unknown as { _core?: { _renderService?: { dimensions?: unknown } } })._core
+    console.log("[Terminal:create] After renderer - dimensions:", coreAfter?._renderService?.dimensions)
+    return renderer
+  })
+
+  // 9. Set up URL link provider asynchronously (heavy - WebLinksAddon)
+  if (onUrlClick) {
+    console.log("[Terminal:create] Step 9: Registering WebLinksAddon asynchronously")
+    webLinksPromise = import("@xterm/addon-web-links").then(({ WebLinksAddon }) => {
+      if (isDisposed) return
+      const webLinksAddon = new WebLinksAddon(
+        (event: MouseEvent, uri: string) => {
+          // Require Cmd+Click (Mac) or Ctrl+Click (Windows/Linux)
+          if (isModifierPressed(event)) {
+            onUrlClick(uri)
+          }
+        },
+        {
+          hover: (event: MouseEvent, uri: string) => {
+            showLinkPopup(event, uri, onUrlClick)
+          },
+          leave: () => {
+            removeLinkPopup()
+          },
+        }
+      )
+      webLinksAddonRef = webLinksAddon
+      xterm.loadAddon(webLinksAddon)
+    })
+  }
+
+  console.log("[Terminal:create] Synchronous initialization complete!")
 
   return {
     xterm,
     fitAddon,
     serializeAddon,
     cleanup: () => {
+      isDisposed = true
       cleanupQuerySuppression()
-      renderer.dispose()
+      rendererCleanup?.()
+      webLinksAddonRef?.dispose()
+      
+      // Handle cleanup for async operations that may still be pending
+      rendererPromise?.then((renderer) => {
+        if (rendererCleanup !== renderer.dispose) {
+          renderer.dispose()
+        }
+      }).catch(() => {})
+      
+      webLinksPromise?.catch(() => {})
     },
   }
 }
@@ -319,8 +369,16 @@ export function setupResizeHandlers(
 ): () => void {
   const debouncedHandleResize = debounce(() => {
     try {
-      fitAddon.fit()
-      onResize(xterm.cols, xterm.rows)
+      // Check container has dimensions before fitting
+      const rect = container.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) {
+        // Also verify xterm element exists and has dimensions
+        const xtermElement = xterm.element
+        if (xtermElement && xtermElement.offsetWidth > 0 && xtermElement.offsetHeight > 0) {
+          fitAddon.fit()
+          onResize(xterm.cols, xterm.rows)
+        }
+      }
     } catch {
       // Ignore resize errors
     }
@@ -372,7 +430,7 @@ function getTerminalCoordsFromEvent(
   const cellWidth = dimensions.css.cell.width
   const cellHeight = dimensions.css.cell.height
 
-  if (cellWidth <= 0 || cellHeight <= 0) return null
+  if (!cellWidth || !cellHeight || cellWidth <= 0 || cellHeight <= 0) return null
 
   const col = Math.max(0, Math.min(xterm.cols - 1, Math.floor(x / cellWidth)))
   const row = Math.max(0, Math.min(xterm.rows - 1, Math.floor(y / cellHeight)))

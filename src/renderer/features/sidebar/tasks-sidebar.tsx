@@ -28,24 +28,19 @@ import {
   IconArrowRight,
   IconSpinner,
   IconChatBubble,
-  IconDoubleChevronLeft,
   PlusIcon,
 } from "../../components/ui/icons"
-import { MoreHorizontal, Circle, Clock, AlertCircle, ChevronLeft, ChevronRight, Target } from "lucide-react"
+import { MoreHorizontal, Circle, Clock, AlertCircle, ChevronLeft, ChevronRight, Target, ChevronDown } from "lucide-react"
 import { toast } from "sonner"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../../components/ui/tooltip"
-import { Kbd } from "../../components/ui/kbd"
 
 interface TasksSidebarProps {
   onToggleSidebar?: () => void
   onStartTask?: (taskId: string) => void
   navViewMode?: "chats" | "tasks"
   onNavViewModeChange?: (mode: "chats" | "tasks") => void
+  workspaces?: Array<{ id: string; name: string; color?: string | null; icon?: string | null }>
+  selectedWorkspace?: { id: string; name: string; color?: string | null; icon?: string | null } | null
+  onWorkspaceSelect?: (workspace: { id: string; name: string; color?: string | null; icon?: string | null }) => void
 }
 
 // Navigation state type
@@ -78,13 +73,23 @@ const timeFrameLabels: Record<string, string> = {
   no_rush: "No Rush",
 }
 
-export function TasksSidebar({ onToggleSidebar, onStartTask, navViewMode = "tasks", onNavViewModeChange }: TasksSidebarProps) {
+export function TasksSidebar({ 
+  onToggleSidebar, 
+  onStartTask, 
+  navViewMode = "tasks", 
+  onNavViewModeChange,
+  workspaces = [],
+  selectedWorkspace,
+  onWorkspaceSelect,
+}: TasksSidebarProps) {
   const [selectedTaskId, setSelectedTaskId] = useAtom(selectedTaskIdAtom)
   const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
   const [selectedProject] = useAtom(selectedProjectAtom)
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [navState, setNavState] = useState<NavState>({ view: "goals" })
+  const [showNewWorkspaceInput, setShowNewWorkspaceInput] = useState(false)
+  const [newWorkspaceName, setNewWorkspaceName] = useState("")
 
   // Fetch goals
   const { data: goals, isLoading: goalsLoading } = trpc.goals.list.useQuery()
@@ -143,6 +148,33 @@ export function TasksSidebar({ onToggleSidebar, onStartTask, navViewMode = "task
 
   // Create chat for task execution
   const createChatMutation = trpc.chats.create.useMutation()
+  
+  // Create workspace
+  const createWorkspaceMutation = trpc.workspaces.create.useMutation({
+    onSuccess: (newWorkspace) => {
+      utils.workspaces.list.invalidate()
+      setShowNewWorkspaceInput(false)
+      setNewWorkspaceName("")
+      onWorkspaceSelect?.(newWorkspace)
+      toast.success("Workspace created", {
+        description: `"${newWorkspace.name}" is ready to use.`,
+      })
+    },
+    onError: (error) => {
+      toast.error("Failed to create workspace", {
+        description: error.message,
+      })
+    },
+  })
+  
+  const handleCreateWorkspace = () => {
+    const name = newWorkspaceName.trim()
+    if (!name) {
+      toast.error("Please enter a workspace name")
+      return
+    }
+    createWorkspaceMutation.mutate({ name })
+  }
 
   // Filter goals
   const filteredGoals = useMemo(() => {
@@ -524,54 +556,92 @@ Please help me complete this goal by working through the tasks.`
   // ============ GOALS LIST VIEW ============
   return (
     <div className="flex flex-col h-full bg-shell overflow-hidden">
-      {/* Top bar: nav + close */}
-      <div className="px-2 pt-2 pb-1 flex items-center gap-2">
-        <div className="flex-1">
-          <div className="flex items-center gap-1 p-0.5 bg-muted/50 rounded-lg h-9">
-            <button
-              onClick={() => onNavViewModeChange?.("chats")}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
-                navViewMode === "chats"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              <IconChatBubble className="w-4 h-4" />
-              <span>Chats</span>
+      {/* Top bar: workspace dropdown + close */}
+      <div className="px-2 pt-1.5 pb-1 flex items-center gap-1.5">
+        {/* Workspace dropdown - Linear style */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex-1 flex items-center gap-1.5 px-1.5 h-7 rounded-md hover:bg-foreground/5 transition-colors text-left min-w-0">
+              {/* Workspace name */}
+              <span className="text-sm font-medium text-foreground truncate flex-1">
+                {selectedWorkspace?.name || "Workspace"}
+              </span>
+              {/* Dropdown chevron */}
+              <ChevronDown className="w-3 h-3 text-muted-foreground flex-shrink-0" />
             </button>
-            <button
-              onClick={() => onNavViewModeChange?.("tasks")}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-1.5 px-3 rounded-md text-sm font-medium transition-all h-full",
-                navViewMode === "tasks"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-52">
+            {workspaces?.map((workspace) => {
+              const isSelected = selectedWorkspace?.id === workspace.id
+              const initial = workspace.name.charAt(0).toUpperCase()
+              return (
+                <DropdownMenuItem
+                  key={workspace.id}
+                  onClick={() => onWorkspaceSelect?.(workspace)}
+                  className="gap-2"
+                >
+                  <div 
+                    className={cn(
+                      "w-5 h-5 rounded flex items-center justify-center text-xs font-medium",
+                      isSelected ? "bg-primary text-primary-foreground" : "bg-muted"
+                    )}
+                    style={workspace.color && !isSelected ? { backgroundColor: workspace.color + '20', color: workspace.color } : undefined}
+                  >
+                    {workspace.icon || initial}
+                  </div>
+                  <span className="flex-1 truncate">{workspace.name}</span>
+                  {isSelected && <CheckIcon className="w-4 h-4" />}
+                </DropdownMenuItem>
+              )
+            })}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem 
+              className="gap-2"
+              onClick={() => setShowNewWorkspaceInput(true)}
             >
-              <CheckIcon className="w-4 h-4" />
-              <span>Tasks</span>
-            </button>
+              <PlusIcon className="w-4 h-4 text-muted-foreground" />
+              New Workspace
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        
+
+      </div>
+
+      {/* New workspace input */}
+      {showNewWorkspaceInput && (
+        <div className="px-2 pb-2">
+          <div className="flex items-center gap-1.5">
+            <Input
+              placeholder="Workspace name..."
+              value={newWorkspaceName}
+              onChange={(e) => setNewWorkspaceName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreateWorkspace()
+                if (e.key === "Escape") {
+                  setShowNewWorkspaceInput(false)
+                  setNewWorkspaceName("")
+                }
+              }}
+              autoFocus
+              className="flex-1 h-7 text-sm"
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleCreateWorkspace}
+              disabled={createWorkspaceMutation.isPending || !newWorkspaceName.trim()}
+              className="h-7 px-2"
+            >
+              {createWorkspaceMutation.isPending ? (
+                <IconSpinner className="h-3.5 w-3.5" />
+              ) : (
+                <CheckIcon className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
         </div>
-
-        <TooltipProvider>
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onToggleSidebar}
-                className="p-1.5 text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted h-8 w-8 flex items-center justify-center"
-              >
-                <IconDoubleChevronLeft className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              Close sidebar
-              <Kbd>⌘+B</Kbd>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </div>
+      )}
 
       {/* Search */}
       <div className="px-2 pb-2">
@@ -579,7 +649,7 @@ Please help me complete this goal by working through the tasks.`
           placeholder="Search goals..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40 h-9"
+          className="w-full rounded-lg text-sm bg-muted border border-input placeholder:text-muted-foreground/40 h-7"
         />
       </div>
 

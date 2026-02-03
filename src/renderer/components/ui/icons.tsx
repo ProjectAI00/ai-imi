@@ -129,6 +129,38 @@ export function IconOpenSidebarRight(props: IconProps) {
   )
 }
 
+/** Sidebar toggle icon - panel with left bar */
+export function IconSidebarToggle(props: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      width="16"
+      height="16"
+      {...props}
+    >
+      <rect
+        x="2"
+        y="2"
+        width="12"
+        height="12"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+      />
+      <rect
+        x="4.5"
+        y="4.5"
+        width="2.5"
+        height="7"
+        rx="0.75"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
 export function DiffIcon(props: IconProps) {
   return (
     <svg

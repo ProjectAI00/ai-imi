@@ -12,8 +12,7 @@ import {
   IconSpinner,
   PlanIcon,
   AgentIcon,
-  IconOpenSidebarRight,
-  IconCloseSidebarRight,
+  IconSidebarToggle,
   PinFilledIcon,
   DiffIcon,
   ClockIcon,
@@ -456,7 +455,7 @@ export function SubChatSelector({
                 WebkitAppRegion: "no-drag",
               }}
             >
-              <IconCloseSidebarRight className="h-4 w-4 scale-x-[-1]" />
+              <IconSidebarToggle className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Close chats pane</TooltipContent>

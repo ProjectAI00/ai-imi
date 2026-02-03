@@ -33,7 +33,7 @@ import { UpdateBanner } from "../../components/update-banner"
 import { useUpdateChecker } from "../../lib/hooks/use-update-checker"
 import { useAgentSubChatStore } from "../../lib/stores/sub-chat-store"
 import { cn } from "../../lib/utils"
-import { IconChatBubble, CheckIcon, SettingsIcon, PlusIcon } from "../../components/ui/icons"
+import { IconChatBubble, CheckIcon, SettingsIcon, IconDoubleChevronRight } from "../../components/ui/icons"
 
 // ============================================================================
 // Constants
@@ -251,62 +251,68 @@ export function AgentsLayout() {
       <ClaudeLoginModal />
       <CliLoginModal />
       <div className="flex w-full h-full relative overflow-hidden bg-shell select-none p-1.5 gap-1.5">
-        {/* Workspace Switcher Rail */}
-        <div className="flex flex-col items-center w-12 pt-1.5 pb-1.5 gap-1 flex-shrink-0">
-          {/* Workspace icons */}
-          {workspaces?.map((workspace) => {
-            const isSelected = selectedWorkspace?.id === workspace.id
-            const initial = workspace.name.charAt(0).toUpperCase()
-            return (
-              <Tooltip key={workspace.id}>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => setSelectedWorkspace({
-                      id: workspace.id,
-                      name: workspace.name,
-                      color: workspace.color,
-                      icon: workspace.icon,
-                    })}
-                    className={cn(
-                      "w-10 h-10 rounded-xl flex items-center justify-center text-sm font-medium transition-all",
-                      isSelected
-                        ? "bg-primary text-primary-foreground ring-2 ring-primary/50"
-                        : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                    style={workspace.color && !isSelected ? { backgroundColor: workspace.color + '20', color: workspace.color } : undefined}
-                  >
-                    {workspace.icon || initial}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right">{workspace.name}</TooltipContent>
-              </Tooltip>
-            )
-          })}
-          
-          {/* Add workspace button */}
+        {/* Nav Rail - Chat/Tasks buttons */}
+        <div className="flex flex-col items-center w-10 pt-[7px] pb-1.5 gap-0.5 flex-shrink-0">
+          {/* Chat button */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => {
-                  // TODO: Open create workspace dialog
-                }}
-                className="w-10 h-10 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border-2 border-dashed border-muted-foreground/30 hover:border-muted-foreground/50"
+                onClick={() => setNavViewMode("chats")}
+                className={cn(
+                  "w-8 h-7 rounded-lg flex items-center justify-center transition-all",
+                  navViewMode === "chats"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}
               >
-                <PlusIcon className="w-5 h-5" />
+                <IconChatBubble className="w-4 h-4" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="right">New Workspace</TooltipContent>
+            <TooltipContent side="right">Chats</TooltipContent>
+          </Tooltip>
+          
+          {/* Tasks button */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setNavViewMode("tasks")}
+                className={cn(
+                  "w-8 h-7 rounded-lg flex items-center justify-center transition-all",
+                  navViewMode === "tasks"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}
+              >
+                <CheckIcon className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Tasks</TooltipContent>
           </Tooltip>
           
           <div className="flex-1" />
+          
+          {/* Toggle sidebar button - only show when sidebar is closed */}
+          {!sidebarOpen && !isMobile && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setSidebarOpen(true)}
+                  className="w-8 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors"
+                >
+                  <IconDoubleChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Open sidebar<span className="ml-1.5 text-muted-foreground">⌘\</span></TooltipContent>
+            </Tooltip>
+          )}
           
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={() => setSettingsOpen(true)}
-                className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors"
+                className="w-8 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors"
               >
-                <SettingsIcon className="w-5 h-5" />
+                <SettingsIcon className="w-4 h-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">Settings</TooltipContent>
@@ -335,18 +341,24 @@ export function AgentsLayout() {
               onToggleSidebar={handleCloseSidebar}
               navViewMode={navViewMode}
               onNavViewModeChange={setNavViewMode}
+              workspaces={workspaces}
+              selectedWorkspace={selectedWorkspace}
+              onWorkspaceSelect={setSelectedWorkspace}
             />
           ) : (
             <TasksSidebar 
               onToggleSidebar={handleCloseSidebar}
               navViewMode={navViewMode}
               onNavViewModeChange={setNavViewMode}
+              workspaces={workspaces}
+              selectedWorkspace={selectedWorkspace}
+              onWorkspaceSelect={setSelectedWorkspace}
             />
           )}
         </ResizableSidebar>
 
-        {/* Main Content - Rounded card panel */}
-        <div className="flex-1 overflow-hidden flex flex-col min-w-0 bg-background rounded-[14px] shadow-sm">
+        {/* Main Content - AgentsContent handles its own card styling */}
+        <div className="flex-1 overflow-hidden flex flex-col min-w-0">
           <AgentsContent />
         </div>
 

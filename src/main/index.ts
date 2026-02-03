@@ -19,6 +19,8 @@ import {
   downloadUpdate,
   setupFocusUpdateCheck,
 } from "./lib/auto-updater"
+import { preloadClaudeEnv } from "./lib/claude"
+import { preloadCliSDKs } from "./lib/cli/adapter"
 
 // Dev mode detection
 const IS_DEV = !!process.env.ELECTRON_RENDERER_URL
@@ -415,10 +417,13 @@ if (gotTheLock) {
     }
 
     console.log(`[App] Starting 1Code${IS_DEV ? " (DEV)" : ""}...`)
+    const startupStart = Date.now()
+    const logStartup = (step: string) => console.log(`[Startup] ${step}: ${Date.now() - startupStart}ms`)
 
     // Verify protocol registration after app is ready
     // This helps diagnose first-install issues where the protocol isn't recognized yet
     verifyProtocolRegistration()
+    logStartup("protocol verified")
 
     // Get Claude Code version for About panel
     let claudeCodeVersion = "unknown"
@@ -435,6 +440,7 @@ if (gotTheLock) {
     } catch (error) {
       console.warn("[App] Failed to read Claude Code version:", error)
     }
+    logStartup("version read")
 
     // Set About panel options with Claude Code version
     app.setAboutPanelOptions({
@@ -565,10 +571,12 @@ if (gotTheLock) {
 
     // Build initial menu
     buildMenu()
+    logStartup("menu built")
 
     // Initialize auth manager
     authManager = new AuthManager(!!process.env.ELECTRON_RENDERER_URL)
     console.log("[App] Auth manager initialized")
+    logStartup("auth manager init")
 
     // Initialize analytics after auth manager so we can identify user
     initAnalytics()
@@ -609,19 +617,31 @@ if (gotTheLock) {
 
     // Initialize database
     try {
+      logStartup("before initDatabase")
       initDatabase()
+      logStartup("after initDatabase")
       console.log("[App] Database initialized")
       
       // Ensure default workspace folder and project exists
       ensureDefaultWorkspace()
+      logStartup("after ensureDefaultWorkspace")
       // Ensure default workspace entry exists (for workspace switcher)
       ensureDefaultWorkspaceEntry()
+      logStartup("after ensureDefaultWorkspaceEntry")
     } catch (error) {
       console.error("[App] Failed to initialize database:", error)
     }
 
+    // Preload Claude shell environment to avoid prompt-time blocking
+    preloadClaudeEnv()
+    
+    // Preload CLI SDKs (Copilot, etc.) to avoid first-message latency
+    preloadCliSDKs()
+    logStartup("preloads started")
+
     // Create main window
     createMainWindow()
+    logStartup("window created")
 
     // Initialize auto-updater (production only)
     if (app.isPackaged) {

@@ -105,7 +105,21 @@ export const copilotModels = [
 /**
  * CLI type union
  */
-export type CliType = "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
+export type CliType = "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot" | "codex"
+
+/**
+ * OpenAI Codex models
+ * @see https://openai.com/codex
+ */
+export const codexModels = [
+    { id: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
+    { id: "gpt-5.1-codex", name: "GPT-5.1 Codex" },
+    { id: "gpt-5-codex", name: "GPT-5 Codex" },
+    { id: "o4-mini", name: "o4-mini" },
+    { id: "gpt-5.2", name: "GPT-5.2" },
+    { id: "gpt-5.1", name: "GPT-5.1" },
+    { id: "gpt-4o", name: "GPT-4o" },
+] as const
 
 /**
  * Get models for a given CLI
@@ -124,6 +138,8 @@ export function getModelsForCli(cli: CliType) {
             return droidModels
         case "copilot":
             return copilotModels
+        case "codex":
+            return codexModels
         default:
             return claudeCodeModels
     }
@@ -146,6 +162,8 @@ export function getDefaultModelId(cli: CliType): string {
             return "claude-opus-4-5-20251101"
         case "copilot":
             return "claude-sonnet-4.5"
+        case "codex":
+            return "gpt-5.2-codex"
         default:
             return "sonnet"
     }
@@ -161,4 +179,5 @@ export const AUTH_ERROR_MESSAGES = {
     amp: "Authentication required. Please configure your API keys with AMP.",
     droid: "Authentication required. Please configure your API keys with Droid.",
     copilot: "Authentication required. Run `copilot /login` in your terminal to authenticate.",
+    codex: "Authentication required. Run `codex auth` in your terminal or set OPENAI_API_KEY.",
 } as const

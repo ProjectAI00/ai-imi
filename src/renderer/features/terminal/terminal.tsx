@@ -62,24 +62,55 @@ export function Terminal({
   const paneIdRef = useRef(paneId)
   paneIdRef.current = paneId
 
-  // Mutations
-  const createOrAttachMutation = trpc.terminal.createOrAttach.useMutation()
-  const writeMutation = trpc.terminal.write.useMutation()
-  const resizeMutation = trpc.terminal.resize.useMutation()
-  const detachMutation = trpc.terminal.detach.useMutation()
-  const clearScrollbackMutation = trpc.terminal.clearScrollback.useMutation()
-
-  // Refs for mutations to avoid effect re-runs
-  const createOrAttachRef = useRef(createOrAttachMutation.mutate)
-  const writeRef = useRef(writeMutation.mutate)
-  const resizeRef = useRef(resizeMutation.mutate)
-  const detachRef = useRef(detachMutation.mutate)
-  const clearScrollbackRef = useRef(clearScrollbackMutation.mutate)
-  createOrAttachRef.current = createOrAttachMutation.mutate
-  writeRef.current = writeMutation.mutate
-  resizeRef.current = resizeMutation.mutate
-  detachRef.current = detachMutation.mutate
-  clearScrollbackRef.current = clearScrollbackMutation.mutate
+  // Lazy mutation refs - mutations are created on first use, not on mount
+  // This avoids creating 5 tRPC subscriptions immediately on component mount
+  const trpcClient = trpc.useUtils().client
+  
+  // Store trpcClient in a ref to make lazy getters truly stable
+  const trpcClientRef = useRef(trpcClient)
+  trpcClientRef.current = trpcClient
+  
+  const createOrAttachRef = useRef<typeof trpcClient.terminal.createOrAttach.mutate | null>(null)
+  const writeRef = useRef<typeof trpcClient.terminal.write.mutate | null>(null)
+  const resizeRef = useRef<typeof trpcClient.terminal.resize.mutate | null>(null)
+  const detachRef = useRef<typeof trpcClient.terminal.detach.mutate | null>(null)
+  const clearScrollbackRef = useRef<typeof trpcClient.terminal.clearScrollback.mutate | null>(null)
+  
+  // Lazy getters that initialize mutations on first call (stable with empty deps)
+  const getCreateOrAttach = useCallback(() => {
+    if (!createOrAttachRef.current) {
+      createOrAttachRef.current = trpcClientRef.current.terminal.createOrAttach.mutate
+    }
+    return createOrAttachRef.current
+  }, [])
+  
+  const getWrite = useCallback(() => {
+    if (!writeRef.current) {
+      writeRef.current = trpcClientRef.current.terminal.write.mutate
+    }
+    return writeRef.current
+  }, [])
+  
+  const getResize = useCallback(() => {
+    if (!resizeRef.current) {
+      resizeRef.current = trpcClientRef.current.terminal.resize.mutate
+    }
+    return resizeRef.current
+  }, [])
+  
+  const getDetach = useCallback(() => {
+    if (!detachRef.current) {
+      detachRef.current = trpcClientRef.current.terminal.detach.mutate
+    }
+    return detachRef.current
+  }, [])
+  
+  const getClearScrollback = useCallback(() => {
+    if (!clearScrollbackRef.current) {
+      clearScrollbackRef.current = trpcClientRef.current.terminal.clearScrollback.mutate
+    }
+    return clearScrollbackRef.current
+  }, [])
 
   // Parse terminal data for cwd (OSC 7 sequences)
   const updateCwdFromData = useCallback(
@@ -186,7 +217,7 @@ export function Terminal({
     const restartTerminal = () => {
       isExitedRef.current = false
       xterm.clear()
-      createOrAttachRef.current(
+      getCreateOrAttach()(
         {
           paneId,
           tabId,
@@ -195,12 +226,16 @@ export function Terminal({
           rows: xterm.rows,
           cwd: terminalCwdRef.current || cwd,
         },
-        {
-          onSuccess: (result) => {
-            applySerializedState(result.serializedState)
-          },
-        },
-      )
+      ).then((result) => {
+        applySerializedState(result.serializedState)
+      }).catch((err) => {
+        console.error("[Terminal] Failed to restart terminal:", err)
+        xterm.write(
+          `\x1b[31m[Failed to restart terminal: ${err.message}]\x1b[0m\r\n`,
+        )
+        xterm.writeln("[Press any key to try again]")
+        isExitedRef.current = true
+      })
     }
 
     // Input handler
@@ -209,7 +244,7 @@ export function Terminal({
         restartTerminal()
         return
       }
-      writeRef.current({ paneId, data })
+      getWrite()({ paneId, data })
     }
 
     // Key handler for command buffer (tab title)
@@ -238,7 +273,7 @@ export function Terminal({
     }
 
     // Create or attach to session
-    createOrAttachRef.current(
+    getCreateOrAttach()(
       {
         paneId,
         tabId,
@@ -248,18 +283,14 @@ export function Terminal({
         cwd: initialCwd || cwd,
         initialCommands,
       },
-      {
-        onSuccess: (result) => {
-          applySerializedState(result.serializedState)
-          xterm.focus()
-        },
-        onError: (err) => {
-          xterm.write(
-            `\x1b[31m[Failed to start terminal: ${err.message}]\x1b[0m\r\n`,
-          )
-        },
-      },
-    )
+    ).then((result) => {
+      applySerializedState(result.serializedState)
+      xterm.focus()
+    }).catch((err) => {
+      xterm.write(
+        `\x1b[31m[Failed to start terminal: ${err.message}]\x1b[0m\r\n`,
+      )
+    })
 
     // Set up handlers
     const inputDisposable = xterm.onData(handleTerminalInput)
@@ -267,12 +298,12 @@ export function Terminal({
 
     const handleClear = () => {
       xterm.clear()
-      clearScrollbackRef.current({ paneId })
+      getClearScrollback()({ paneId })
     }
 
     const handleWrite = (data: string) => {
       if (!isExitedRef.current) {
-        writeRef.current({ paneId, data })
+        getWrite()({ paneId, data })
       }
     }
 
@@ -294,7 +325,7 @@ export function Terminal({
       xterm,
       fitAddon,
       (cols, rows) => {
-        resizeRef.current({ paneId, cols, rows })
+        getResize()({ paneId, cols, rows })
       },
     )
 
@@ -322,7 +353,7 @@ export function Terminal({
       const serializedState = serializeAddon.serialize()
 
       // Detach instead of kill - keeps session alive for reattach
-      detachRef.current({ paneId, serializedState })
+      getDetach()({ paneId, serializedState })
 
       console.log("[Terminal:useEffect] Disposing xterm...")
       xterm.dispose()
@@ -333,8 +364,9 @@ export function Terminal({
       console.log("[Terminal:useEffect] UNMOUNT complete")
     }
     // Note: terminalCwd is accessed via ref to avoid remounting on cwd changes
+    // Lazy getters are stable callbacks, no need to include in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paneId, cwd, workspaceId, tabId, initialCwd, initialCommands, isDark])
+  }, [paneId, cwd, workspaceId, tabId, initialCwd, initialCommands, isDark, getCreateOrAttach, getWrite, getResize, getDetach, getClearScrollback])
 
   // Update theme when isDark changes or VS Code theme changes (without recreating terminal)
   useEffect(() => {

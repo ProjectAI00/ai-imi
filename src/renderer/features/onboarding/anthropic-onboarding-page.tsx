@@ -5,7 +5,6 @@ import { useSetAtom } from "jotai"
 
 import { Input } from "../../components/ui/input"
 import { ClaudeCodeIcon, IconSpinner } from "../../components/ui/icons"
-import { Logo } from "../../components/ui/logo"
 import { trpc } from "../../lib/trpc"
 import { anthropicOnboardingCompletedAtom } from "../../lib/atoms"
 
@@ -213,15 +212,10 @@ export function AnthropicOnboardingPage() {
       />
 
       <div className="w-full max-w-[440px] space-y-8 px-4">
-        {/* Header with dual icons */}
+        {/* Header with single icon */}
         <div className="text-center space-y-4">
-          <div className="flex items-center justify-center gap-2 p-2 mx-auto w-max rounded-full border border-border">
-            <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center">
-              <Logo className="w-5 h-5" fill="white" />
-            </div>
-            <div className="w-10 h-10 rounded-full bg-[#D97757] flex items-center justify-center">
-              <ClaudeCodeIcon className="w-6 h-6 text-white" />
-            </div>
+          <div className="flex items-center justify-center p-3 mx-auto w-max rounded-full bg-[#D97757]">
+            <ClaudeCodeIcon className="w-8 h-8 text-white" />
           </div>
           <div className="space-y-1">
             <h1 className="text-base font-semibold tracking-tight">

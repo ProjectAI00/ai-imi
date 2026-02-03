@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState, Component, ReactNode } from "react"
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  Component,
+  ReactNode,
+  Suspense,
+} from "react"
 import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai"
 import { ThemeProvider } from "next-themes"
 import { TRPCProvider } from "./contexts/TRPCProvider"
-import { AgentsLayout } from "./features/layout/agents-layout"
-import {
-  AnthropicOnboardingPage,
-  SelectRepoPage,
-} from "./features/onboarding"
 import { TooltipProvider } from "./components/ui/tooltip"
 import { appStore } from "./lib/jotai-store"
 import { initAnalytics, identify, shutdown } from "./lib/analytics"
@@ -14,6 +16,21 @@ import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { anthropicOnboardingCompletedAtom } from "./lib/atoms"
 import { selectedProjectAtom } from "./features/agents/atoms"
 import { trpc } from "./lib/trpc"
+import { IconSpinner } from "./components/ui/icons"
+
+const AgentsLayout = React.lazy(() =>
+  import("./features/layout/agents-layout").then((m) => ({
+    default: m.AgentsLayout,
+  }))
+)
+const AnthropicOnboardingPage = React.lazy(() =>
+  import("./features/onboarding").then((m) => ({
+    default: m.AnthropicOnboardingPage,
+  }))
+)
+const SelectRepoPage = React.lazy(() =>
+  import("./features/onboarding").then((m) => ({ default: m.SelectRepoPage }))
+)
 
 // Timeout for loading state (in milliseconds)
 const LOADING_TIMEOUT_MS = 5000
@@ -151,9 +168,13 @@ function AppContent() {
     return <AnthropicOnboardingPage />
   }
 
-  // While loading, show nothing to prevent flicker
+  // Show minimal loading skeleton while fetching projects
   if (isLoadingProjects && !hasTimedOut) {
-    return null
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-background">
+        <IconSpinner className="size-6 text-muted-foreground" />
+      </div>
+    )
   }
 
   if (!validatedProject && (!isLoadingProjects || hasTimedOut || isError)) {
@@ -210,7 +231,15 @@ export function App() {
                   data-agents-page
                   className="h-screen w-screen bg-background text-foreground overflow-hidden"
                 >
-                  <AppContent />
+                  <Suspense
+                    fallback={
+                      <div className="h-screen w-screen flex items-center justify-center bg-background">
+                        <IconSpinner className="size-6 text-muted-foreground" />
+                      </div>
+                    }
+                  >
+                    <AppContent />
+                  </Suspense>
                 </div>
               </TRPCProvider>
             </TooltipProvider>

@@ -11,12 +11,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  IconDoubleChevronRight,
-  CustomTerminalIcon,
   IconChatBubble,
 } from "@/components/ui/icons"
-import { AlignJustify } from "lucide-react"
-import { Kbd } from "@/components/ui/kbd"
 import { Terminal } from "./terminal"
 import { TerminalTabs } from "./terminal-tabs"
 import { getDefaultTerminalBg } from "./helpers"
@@ -363,32 +359,16 @@ export function TerminalSidebar({
   if (isMobileFullscreen) {
     return (
       <div className="flex flex-col h-full w-full bg-background">
-        {/* Mobile header with back button and tabs */}
+        {/* Mobile header with tabs only (no hamburger, no border) */}
         <div
-          className="flex items-center gap-1.5 px-2 py-2 flex-shrink-0 border-b"
+          className="flex items-center gap-1.5 px-2 py-2 flex-shrink-0"
           style={{
             backgroundColor: terminalBg,
             // @ts-expect-error - WebKit-specific property for Electron window dragging
             WebkitAppRegion: "drag",
-            borderBottomWidth: "0.5px",
           }}
         >
-          {/* Back button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleMobileClose}
-            className="h-7 w-7 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] flex-shrink-0 rounded-md"
-            aria-label="Back to chat"
-            style={{
-              // @ts-expect-error - WebKit-specific property
-              WebkitAppRegion: "no-drag",
-            }}
-          >
-            <AlignJustify className="h-4 w-4" />
-          </Button>
-
-          {/* Terminal Tabs - directly after back button, inherits drag from parent */}
+          {/* Terminal Tabs */}
           <div className="flex items-center gap-1 flex-1 min-w-0">
             {terminals.length > 0 && (
               <TerminalTabs
@@ -403,6 +383,7 @@ export function TerminalSidebar({
                 onCloseTerminalsToRight={closeTerminalsToRight}
                 onCreateTerminal={createTerminal}
                 onRenameTerminal={renameTerminal}
+                onCloseSidebar={handleMobileClose}
               />
             )}
           </div>
@@ -440,7 +421,7 @@ export function TerminalSidebar({
     )
   }
 
-  // Desktop sidebar layout
+  // Desktop sidebar layout - with window/canvas styling like main chat panel
   return (
     <ResizableSidebar
       isOpen={isOpen}
@@ -453,15 +434,16 @@ export function TerminalSidebar({
       initialWidth={0}
       exitWidth={0}
       showResizeTooltip={true}
-      className="bg-background border-l"
-      style={{ borderLeftWidth: "0.5px", overflow: "hidden" }}
+      className="bg-shell"
+      style={{ overflow: "hidden", padding: "6px", paddingRight: 0 }}
     >
-      <div className="flex flex-col h-full min-w-0 overflow-hidden">
+      {/* Window/canvas container - floating card with shell background visible around it */}
+      <div 
+        className="flex flex-col h-full min-w-0 overflow-hidden rounded-[14px] shadow-sm"
+        style={{ backgroundColor: terminalBg }}
+      >
         {/* Header with tabs */}
-        <div
-          className="flex items-center gap-1 pl-1 pr-2 py-1.5 flex-shrink-0"
-          style={{ backgroundColor: terminalBg }}
-        >
+        <div className="flex items-center gap-1 pl-1 pr-2 py-1.5 flex-shrink-0">
           {/* Terminal Tabs */}
           {terminals.length > 0 && (
             <TerminalTabs
@@ -476,13 +458,13 @@ export function TerminalSidebar({
               onCloseTerminalsToRight={closeTerminalsToRight}
               onCreateTerminal={createTerminal}
               onRenameTerminal={renameTerminal}
+              onCloseSidebar={closeSidebar}
             />
           )}
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {/* Chat toggle button - only shown when onOpenChat is provided */}
-            {onOpenChat && (
+          {/* Action buttons - only chat toggle now, close moved to tabs */}
+          {onOpenChat && (
+            <div className="flex items-center gap-1 flex-shrink-0">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -499,34 +481,12 @@ export function TerminalSidebar({
                   Switch to chat
                 </TooltipContent>
               </Tooltip>
-            )}
-
-            {/* Close button */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={closeSidebar}
-                  className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
-                  aria-label="Close terminal"
-                >
-                  <IconDoubleChevronRight className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                Close terminal
-                <Kbd>⌘J</Kbd>
-              </TooltipContent>
-            </Tooltip>
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Terminal Content */}
-        <div
-          className="flex-1 min-h-0 min-w-0 overflow-hidden"
-          style={{ backgroundColor: terminalBg }}
-        >
+        <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
           {activeTerminal && canRenderTerminal ? (
             <motion.div
               key={activeTerminal.paneId}

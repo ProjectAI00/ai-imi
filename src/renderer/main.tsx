@@ -8,12 +8,10 @@ if (import.meta.env.PROD) {
 import ReactDOM from "react-dom/client"
 import { App } from "./App"
 import "./styles/globals.css"
-import { preloadDiffHighlighter } from "./lib/themes/diff-view-highlighter"
 
 console.log("[main.tsx] Script starting...")
 
-// Preload shiki highlighter for diff view (prevents delay when opening diff sidebar)
-preloadDiffHighlighter()
+// Skip diff highlighter preload to avoid main-thread cost during startup.
 
 // Suppress ResizeObserver loop error - this is a non-fatal browser warning
 // that can occur when layout changes trigger observation callbacks
