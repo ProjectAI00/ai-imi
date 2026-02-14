@@ -32,6 +32,8 @@ interface AgentSendButtonProps {
   ariaLabel?: string
   /** Whether this is plan mode (orange styling) */
   isPlanMode?: boolean
+  /** Current chat mode for styling */
+  chatMode?: "plan" | "agent" | "ask"
 }
 
 export function AgentSendButton({
@@ -44,6 +46,7 @@ export function AgentSendButton({
   size = "sm",
   ariaLabel,
   isPlanMode = false,
+  chatMode,
 }: AgentSendButtonProps) {
   // Note: Enter shortcut is now handled by input components directly
 
@@ -109,9 +112,12 @@ export function AgentSendButton({
     ? "shadow-[0_0_0_2px_white,0_0_0_4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_2px_#1a1a1a,0_0_0_4px_rgba(255,255,255,0.08)]"
     : undefined
 
-  // Mode-specific styling (agent=foreground, plan=orange)
-  const modeClass = isPlanMode
+  // Mode-specific styling (agent=foreground, plan=orange, ask=blue)
+  const effectiveMode = chatMode || (isPlanMode ? "plan" : "agent")
+  const modeClass = effectiveMode === "plan"
     ? "!bg-plan-mode hover:!bg-plan-mode/90 !text-plan-mode-foreground !shadow-none"
+    : effectiveMode === "ask"
+    ? "!bg-blue-500 hover:!bg-blue-600 !text-white !shadow-none"
     : "!bg-foreground hover:!bg-foreground/90 !text-background !shadow-none"
 
   return (

@@ -51,6 +51,8 @@ const THEME_TO_SHIKI_MAP: Record<string, shiki.BundledTheme> = {
   // Claude themes use GitHub themes (no tokenColors)
   "claude-dark": "github-dark",
   "claude-light": "github-light",
+  // imi light uses GitHub Light for syntax
+  "imi-light": "github-light",
   // Vesper maps to shiki's vesper theme
   "vesper-dark": "vesper",
   // Vitesse themes map directly

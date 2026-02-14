@@ -215,11 +215,21 @@ export const lastSelectedModelPerAgentAtom = atomWithStorage<Record<string, stri
   { getOnInit: true },
 )
 
-export const isPlanModeAtom = atomWithStorage<boolean>(
-  "agents:isPlanMode",
-  false,
+export type ChatMode = "plan" | "agent" | "ask"
+
+export const chatModeAtom = atomWithStorage<ChatMode>(
+  "agents:chatMode",
+  "agent",
   undefined,
   { getOnInit: true },
+)
+
+// Legacy compatibility — derived from chatModeAtom
+export const isPlanModeAtom = atom(
+  (get) => get(chatModeAtom) === "plan",
+  (_get, set, value: boolean) => {
+    set(chatModeAtom, value ? "plan" : "agent")
+  },
 )
 
 // Model ID to full model string mapping per agent
@@ -379,10 +389,10 @@ export const archiveSearchQueryAtom = atom<string>("")
 // Repository filter for archive (null = all repositories)
 export const archiveRepositoryFilterAtom = atom<string | null>(null)
 
-// Track last used mode (plan/agent) per chat
-// Map<chatId, "plan" | "agent">
-export const lastChatModesAtom = atom<Map<string, "plan" | "agent">>(
-  new Map<string, "plan" | "agent">(),
+// Track last used mode (plan/agent/ask) per chat
+// Map<chatId, "plan" | "agent" | "ask">
+export const lastChatModesAtom = atom<Map<string, ChatMode>>(
+  new Map<string, ChatMode>(),
 )
 
 // Mobile view mode - chat (default, shows NewChatForm), chats list, preview, diff, or terminal

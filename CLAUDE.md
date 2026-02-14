@@ -24,6 +24,12 @@ bun run db:generate      # Generate migrations from schema
 bun run db:push          # Push schema directly (dev only)
 ```
 
+## Documentation
+
+- `docs/` - human-oriented architecture, feature, guide, and decision docs
+- `context/` - AI-optimized context cards and current state
+- `context/modules/` - module-level fast-ingest references
+
 ## Architecture
 
 ```

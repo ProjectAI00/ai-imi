@@ -209,6 +209,7 @@ export const copilotAdapter: CliAdapter = {
       let isSubscriptionActive = true
       let accumulatedText = ""
       let hasReceivedDeltas = false // Track if message_delta events delivered content
+      const emittedNonDeltaMessages = new Set<string>()
 
       // Safe emit that won't crash if subscription was cleaned up
       const safeEmit = (chunk: UIMessageChunk) => {
@@ -407,6 +408,14 @@ export const copilotAdapter: CliAdapter = {
                     else if (typeof msg?.content === "string") content = msg.content
                   }
                   if (content) {
+                    const dedupeKey = content.trim()
+                    if (dedupeKey && emittedNonDeltaMessages.has(dedupeKey)) {
+                      console.log("[Copilot SDK] Skipping duplicate assistant.message payload")
+                      break
+                    }
+                    if (dedupeKey) {
+                      emittedNonDeltaMessages.add(dedupeKey)
+                    }
                     accumulatedText += content
                     safeEmit({
                       type: "text-delta",

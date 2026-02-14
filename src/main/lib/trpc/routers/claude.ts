@@ -22,7 +22,7 @@ import { codexAdapter } from "../../cli/adapters/codex"
 import { resolveAskUserResponse } from "../../cli/tools"
 import { ROOT_SYSTEM_PROMPT, getRootSystemPrompt } from "../../prompts"
 import { extractTasksFromText, toTaskSkeletons, hasTaskDefinitions } from "../../cli/task-extraction"
-import { parsePlanBuilderResponse, isPlanBuilderComplete } from "../../cli/plan-agent"
+import { parsePlanBuilderResponse, isPlanBuilderComplete, parseChecklistPlanResponse } from "../../cli/plan-agent"
 import type { ChatInput } from "../../cli/types"
 import { AuthStore } from "../../../auth-store"
 import { buildContext, type Message } from "../../cli/context"
@@ -164,7 +164,7 @@ export const claudeRouter = router({
         prompt: z.string(),
         cwd: z.string(),
         cli: z.enum(["claude-code", "opencode", "cursor", "amp", "droid", "copilot"]).default("claude-code"),
-        mode: z.enum(["plan", "agent"]).default("agent"),
+        mode: z.enum(["plan", "agent", "ask"]).default("agent"),
         sessionId: z.string().optional(),
         model: z.string().optional(),
         maxThinkingTokens: z.number().optional(), // Enable extended thinking
@@ -756,6 +756,79 @@ export const claudeRouter = router({
                             goalName: createdGoal.name,
                             taskCount: createdTaskIds.length,
                           } as UIMessageChunk)
+                        } else {
+                          const checklistResult = parseChecklistPlanResponse(assistantText)
+                          if (checklistResult.isComplete) {
+                            console.log(
+                              `[Plan Mode] Fallback checklist parse: creating goal with ${checklistResult.tasks.length} tasks`,
+                            )
+                            const currentSubChat = db
+                              .select()
+                              .from(subChats)
+                              .where(eq(subChats.id, input.subChatId))
+                              .get()
+                            if (currentSubChat?.goalId) {
+                              console.log(
+                                `[Plan Mode] Fallback checklist parse skipped: sub-chat already linked to goal ${currentSubChat.goalId}`,
+                              )
+                            } else {
+                              const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                              const workspaceId = chat?.projectId
+                              const project = workspaceId
+                                ? db.select().from(projects).where(eq(projects.id, workspaceId)).get()
+                                : null
+
+                              const createdGoal = db
+                                .insert(goals)
+                                .values({
+                                  name: checklistResult.goalName || "Plan",
+                                  description: `Plan created from checklist: ${checklistResult.tasks.length} tasks`,
+                                  workspaceId,
+                                  priority: "medium",
+                                  tags: "[]",
+                                  status: "todo",
+                                  workspacePath: project?.path || input.cwd,
+                                })
+                                .returning()
+                                .get()
+
+                              const createdTaskIds: string[] = []
+                              for (const taskSkeleton of checklistResult.tasks) {
+                                const timeFrame = taskSkeleton.timeFrame || "this_week"
+                                const dueDate = calculateDueDate(timeFrame)
+
+                                const created = db
+                                  .insert(tasks)
+                                  .values({
+                                    title: taskSkeleton.title!,
+                                    description: taskSkeleton.description!,
+                                    priority: taskSkeleton.priority || "medium",
+                                    timeFrame,
+                                    dueDate,
+                                    projectId: workspaceId,
+                                    goalId: createdGoal.id,
+                                    chatId: input.chatId,
+                                    assigneeType: "ai",
+                                    status: "todo",
+                                    createdBy: "ai",
+                                    workspacePath: project?.path || input.cwd,
+                                    relevantFiles: "[]",
+                                    tools: "[]",
+                                  })
+                                  .returning()
+                                  .get()
+
+                                createdTaskIds.push(created.id)
+                              }
+
+                              emit.next({
+                                type: "goal-created",
+                                goalId: createdGoal.id,
+                                goalName: createdGoal.name,
+                                taskCount: createdTaskIds.length,
+                              } as UIMessageChunk)
+                            }
+                          }
                         }
                       } catch (planError) {
                         console.error(`[Plan Mode] Failed to create goal/tasks:`, planError)
@@ -1665,6 +1738,79 @@ export const claudeRouter = router({
                         goalName: createdGoal.name,
                         taskCount: createdTaskIds.length,
                       } as UIMessageChunk)
+                    } else {
+                      const checklistResult = parseChecklistPlanResponse(fullText)
+                      if (checklistResult.isComplete) {
+                        console.log(
+                          `[Plan Mode] Fallback checklist parse: creating goal with ${checklistResult.tasks.length} tasks`,
+                        )
+                        const currentSubChat = db
+                          .select()
+                          .from(subChats)
+                          .where(eq(subChats.id, input.subChatId))
+                          .get()
+                        if (currentSubChat?.goalId) {
+                          console.log(
+                            `[Plan Mode] Fallback checklist parse skipped: sub-chat already linked to goal ${currentSubChat.goalId}`,
+                          )
+                        } else {
+                          const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+                          const workspaceId = chat?.projectId
+                          const project = workspaceId
+                            ? db.select().from(projects).where(eq(projects.id, workspaceId)).get()
+                            : null
+
+                          const createdGoal = db
+                            .insert(goals)
+                            .values({
+                              name: checklistResult.goalName || "Plan",
+                              description: `Plan created from checklist: ${checklistResult.tasks.length} tasks`,
+                              workspaceId,
+                              priority: "medium",
+                              tags: "[]",
+                              status: "todo",
+                              workspacePath: project?.path || input.cwd,
+                            })
+                            .returning()
+                            .get()
+
+                          const createdTaskIds: string[] = []
+                          for (const taskSkeleton of checklistResult.tasks) {
+                            const timeFrame = taskSkeleton.timeFrame || "this_week"
+                            const dueDate = calculateDueDate(timeFrame)
+
+                            const created = db
+                              .insert(tasks)
+                              .values({
+                                title: taskSkeleton.title!,
+                                description: taskSkeleton.description!,
+                                priority: taskSkeleton.priority || "medium",
+                                timeFrame,
+                                dueDate,
+                                projectId: workspaceId,
+                                goalId: createdGoal.id,
+                                chatId: input.chatId,
+                                assigneeType: "ai",
+                                status: "todo",
+                                createdBy: "ai",
+                                workspacePath: project?.path || input.cwd,
+                                relevantFiles: "[]",
+                                tools: "[]",
+                              })
+                              .returning()
+                              .get()
+
+                            createdTaskIds.push(created.id)
+                          }
+
+                          safeEmit({
+                            type: "goal-created",
+                            goalId: createdGoal.id,
+                            goalName: createdGoal.name,
+                            taskCount: createdTaskIds.length,
+                          } as UIMessageChunk)
+                        }
+                      }
                     }
                   } catch (planError) {
                     console.error(`[Plan Mode] Failed to create goal/tasks:`, planError)

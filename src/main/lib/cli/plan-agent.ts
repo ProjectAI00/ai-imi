@@ -15,6 +15,12 @@ export interface PlanBuilderResult {
   isComplete: boolean
 }
 
+export interface ChecklistPlanResult {
+  goalName: string | null
+  tasks: Partial<TaskSkeleton>[]
+  isComplete: boolean
+}
+
 /**
  * Parse AI response for goal JSON block
  * Looks for ```goal ... ``` code fence
@@ -91,6 +97,44 @@ export function isPlanBuilderComplete(result: PlanBuilderResult): boolean {
 
   // Check all tasks have required fields
   return result.tasks.every((t) => t.title && t.description)
+}
+
+/**
+ * Parse markdown checklist plan fallback.
+ * Supports:
+ *   # Goal Name
+ *   - [ ] Task one
+ *   - [ ] Task two
+ */
+export function parseChecklistPlanResponse(text: string): ChecklistPlanResult {
+  const hasTaskList = /^[-*]\s+(?:\[[ x]\]\s*)?.+$/im.test(text)
+  if (!hasTaskList) {
+    return { goalName: null, tasks: [], isComplete: false }
+  }
+
+  const headingMatch = text.match(/^#\s+(.+)$/m)
+  const goalName = headingMatch?.[1]?.trim() || "Plan"
+
+  const tasks: Partial<TaskSkeleton>[] = []
+  const lines = text.split("\n")
+  for (const line of lines) {
+    const taskMatch = line.match(/^[-*]\s+(?:\[[ x]\]\s*)?(.+)$/i)
+    if (!taskMatch) continue
+    const title = taskMatch[1].trim()
+    if (!title) continue
+    tasks.push({
+      title,
+      description: title,
+      priority: "medium",
+      timeFrame: "this_week",
+    })
+  }
+
+  return {
+    goalName,
+    tasks,
+    isComplete: tasks.length > 0,
+  }
 }
 
 /**

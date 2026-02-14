@@ -16,6 +16,7 @@ import {
 } from "../../../components/ui/dropdown-menu"
 import {
   AgentIcon,
+  AskIcon,
   AttachIcon,
   CheckIcon,
   ClaudeCodeIcon,
@@ -86,6 +87,8 @@ import {
   clearLoading,
   diffSidebarOpenAtomFamily,
   isPlanModeAtom,
+  chatModeAtom,
+  type ChatMode,
   justCreatedIdsAtom,
   lastSelectedAgentIdAtom,
   lastSelectedModelIdAtom,
@@ -1388,6 +1391,7 @@ function ChatViewInner({
 
   // Plan mode state (read from global atom)
   const [isPlanMode, setIsPlanMode] = useAtom(isPlanModeAtom)
+  const [chatMode, setChatMode] = useAtom(chatModeAtom)
 
   // Mutation for updating sub-chat mode in database
   const updateSubChatModeMutation = api.agents.updateSubChatMode.useMutation({
@@ -1409,13 +1413,13 @@ function ChatViewInner({
         .allSubChats.find((sc) => sc.id === variables.subChatId)
       if (subChat) {
         // Revert to previous mode
-        const revertedMode = variables.mode === "plan" ? "agent" : "plan"
+        const revertedMode: ChatMode = variables.mode === "plan" ? "agent" : variables.mode === "ask" ? "agent" : "plan"
         useAgentSubChatStore
           .getState()
           .updateSubChatMode(variables.subChatId, revertedMode)
-        // Update ref BEFORE setIsPlanMode to prevent useEffect from triggering
-        lastIsPlanModeRef.current = revertedMode === "plan"
-        setIsPlanMode(revertedMode === "plan")
+        // Update ref BEFORE setChatMode to prevent useEffect from triggering
+        lastChatModeRef.current = revertedMode
+        setChatMode(revertedMode)
       }
       console.error("Failed to update sub-chat mode:", error.message)
     },
@@ -1432,38 +1436,36 @@ function ChatViewInner({
         .allSubChats.find((sc) => sc.id === subChatId)
 
       if (subChat?.mode) {
-        setIsPlanMode(subChat.mode === "plan")
+        setChatMode(subChat.mode as ChatMode)
       }
       lastInitializedRef.current = subChatId
     }
-    // Dependencies: Only subChatId - setIsPlanMode is stable, useAgentSubChatStore is external
-  }, [subChatId, setIsPlanMode])
+    // Dependencies: Only subChatId - setChatMode is stable, useAgentSubChatStore is external
+  }, [subChatId, setChatMode])
 
   // Track last mode to detect actual user changes (not store updates)
-  const lastIsPlanModeRef = useRef<boolean>(isPlanMode)
+  const lastChatModeRef = useRef<ChatMode>(chatMode)
 
-  // Update mode for current sub-chat when USER changes isPlanMode
+  // Update mode for current sub-chat when USER changes chatMode
   useEffect(() => {
-    // Skip if isPlanMode didn't actually change
-    if (lastIsPlanModeRef.current === isPlanMode) {
+    // Skip if chatMode didn't actually change
+    if (lastChatModeRef.current === chatMode) {
       return
     }
 
-    const newMode = isPlanMode ? "plan" : "agent"
-
-    lastIsPlanModeRef.current = isPlanMode
+    lastChatModeRef.current = chatMode
 
     if (subChatId) {
       // Update local store immediately (optimistic update)
-      useAgentSubChatStore.getState().updateSubChatMode(subChatId, newMode)
+      useAgentSubChatStore.getState().updateSubChatMode(subChatId, chatMode)
 
       // Save to database with error handling to maintain consistency
       if (!subChatId.startsWith("temp-")) {
-        updateSubChatModeMutation.mutate({ subChatId, mode: newMode })
+        updateSubChatModeMutation.mutate({ subChatId, mode: chatMode })
       }
     }
     // Dependencies: updateSubChatModeMutation.mutate is stable, useAgentSubChatStore is external
-  }, [isPlanMode, subChatId, updateSubChatModeMutation.mutate])
+  }, [chatMode, subChatId, updateSubChatModeMutation.mutate])
 
   // Model selection state
   const [lastSelectedModelId, setLastSelectedModelId] = useAtom(
@@ -1595,7 +1597,7 @@ function ChatViewInner({
   const [modeTooltip, setModeTooltip] = useState<{
     visible: boolean
     position: { top: number; left: number }
-    mode: "agent" | "plan"
+    mode: "agent" | "plan" | "ask"
   } | null>(null)
   const [planApprovalPending, setPlanApprovalPending] = useState<
     Record<string, boolean>
@@ -1964,14 +1966,14 @@ function ChatViewInner({
     useAgentSubChatStore.getState().updateSubChatMode(subChatId, "agent")
 
     // Update React state (for UI)
-    setIsPlanMode(false)
+    setChatMode("agent")
 
     // Send "Implement plan" message (now in agent mode)
     sendMessage({
       role: "user",
       parts: [{ type: "text", text: "Implement plan" }],
     })
-  }, [subChatId, setIsPlanMode, sendMessage])
+  }, [subChatId, setChatMode, sendMessage])
 
   // Detect PR URLs in assistant messages and store them
   const detectedPrUrlRef = useRef<string | null>(null)
@@ -2246,7 +2248,7 @@ function ChatViewInner({
     trackMessageSent({
       workspaceId: subChatId,
       messageLength: text.length,
-      mode: isPlanMode ? "plan" : "agent",
+      mode: chatMode,
     })
 
     // Trigger auto-rename on first message in a new sub-chat
@@ -2363,14 +2365,13 @@ function ChatViewInner({
             }
             break
           case "plan":
-            if (!isPlanMode) {
-              setIsPlanMode(true)
-            }
+            setChatMode("plan")
             break
           case "agent":
-            if (isPlanMode) {
-              setIsPlanMode(false)
-            }
+            setChatMode("agent")
+            break
+          case "ask":
+            setChatMode("ask")
             break
           // Prompt-based commands - auto-send to agent
           case "goals":
@@ -2402,7 +2403,7 @@ function ChatViewInner({
         setTimeout(() => handleSend(), 0)
       }
     },
-    [isPlanMode, setIsPlanMode, handleSend, onCreateNewSubChat],
+    [chatMode, setChatMode, handleSend, onCreateNewSubChat],
   )
 
   // Paste handler for images and plain text
@@ -2883,7 +2884,11 @@ function ChatViewInner({
                     onCloseSlashTrigger={handleCloseSlashTrigger}
                     onContentChange={setHasContent}
                     onSubmit={handleSend}
-                    onShiftTab={() => setIsPlanMode((prev) => !prev)}
+                    onShiftTab={() => {
+                      const modes: ChatMode[] = ["agent", "ask", "plan"]
+                      const idx = modes.indexOf(chatMode)
+                      setChatMode(modes[(idx + 1) % modes.length])
+                    }}
                     placeholder="Plan, @ for context, / for commands"
                     className={cn(
                       "bg-transparent max-h-[200px] overflow-y-auto p-1",
@@ -2913,12 +2918,14 @@ function ChatViewInner({
                     >
                       <DropdownMenuTrigger asChild>
                         <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                          {isPlanMode ? (
+                          {chatMode === "plan" ? (
                             <PlanIcon className="h-3.5 w-3.5" />
+                          ) : chatMode === "ask" ? (
+                            <AskIcon className="h-3.5 w-3.5" />
                           ) : (
                             <AgentIcon className="h-3.5 w-3.5" />
                           )}
-                          <span>{isPlanMode ? "Plan" : "Agent"}</span>
+                          <span>{chatMode === "plan" ? "Plan" : chatMode === "ask" ? "Ask" : "Agent"}</span>
                           <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                         </button>
                       </DropdownMenuTrigger>
@@ -2936,7 +2943,7 @@ function ChatViewInner({
                               tooltipTimeoutRef.current = null
                             }
                             setModeTooltip(null)
-                            setIsPlanMode(false)
+                            setChatMode("agent")
                             setModeDropdownOpen(false)
                           }}
                           className="justify-between gap-2"
@@ -2979,7 +2986,7 @@ function ChatViewInner({
                             <AgentIcon className="w-4 h-4 text-muted-foreground" />
                             <span>Agent</span>
                           </div>
-                          {!isPlanMode && (
+                          {chatMode === "agent" && (
                             <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                           )}
                         </DropdownMenuItem>
@@ -2991,7 +2998,62 @@ function ChatViewInner({
                               tooltipTimeoutRef.current = null
                             }
                             setModeTooltip(null)
-                            setIsPlanMode(true)
+                            setChatMode("ask")
+                            setModeDropdownOpen(false)
+                          }}
+                          className="justify-between gap-2"
+                          onMouseEnter={(e) => {
+                            if (tooltipTimeoutRef.current) {
+                              clearTimeout(tooltipTimeoutRef.current)
+                              tooltipTimeoutRef.current = null
+                            }
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            const showTooltip = () => {
+                              setModeTooltip({
+                                visible: true,
+                                position: {
+                                  top: rect.top,
+                                  left: rect.right + 8,
+                                },
+                                mode: "ask",
+                              })
+                              hasShownTooltipRef.current = true
+                              tooltipTimeoutRef.current = null
+                            }
+                            if (hasShownTooltipRef.current) {
+                              showTooltip()
+                            } else {
+                              tooltipTimeoutRef.current = setTimeout(
+                                showTooltip,
+                                1000,
+                              )
+                            }
+                          }}
+                          onMouseLeave={() => {
+                            if (tooltipTimeoutRef.current) {
+                              clearTimeout(tooltipTimeoutRef.current)
+                              tooltipTimeoutRef.current = null
+                            }
+                            setModeTooltip(null)
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <AskIcon className="w-4 h-4 text-muted-foreground" />
+                            <span>Ask</span>
+                          </div>
+                          {chatMode === "ask" && (
+                            <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                          )}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            // Clear tooltip before closing dropdown (onMouseLeave won't fire)
+                            if (tooltipTimeoutRef.current) {
+                              clearTimeout(tooltipTimeoutRef.current)
+                              tooltipTimeoutRef.current = null
+                            }
+                            setModeTooltip(null)
+                            setChatMode("plan")
                             setModeDropdownOpen(false)
                           }}
                           className="justify-between gap-2"
@@ -3034,7 +3096,7 @@ function ChatViewInner({
                             <PlanIcon className="w-4 h-4 text-muted-foreground" />
                             <span>Plan</span>
                           </div>
-                          {isPlanMode && (
+                          {chatMode === "plan" && (
                             <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                           )}
                         </DropdownMenuItem>
@@ -3056,6 +3118,8 @@ function ChatViewInner({
                               <span>
                                 {modeTooltip.mode === "agent"
                                   ? "Apply changes directly without a plan"
+                                  : modeTooltip.mode === "ask"
+                                  ? "Conversational mode for any kind of question"
                                   : "Create a plan before making changes"}
                               </span>
                             </div>
@@ -3259,6 +3323,7 @@ function ChatViewInner({
                             )
                           }}
                           isPlanMode={isPlanMode}
+                          chatMode={chatMode}
                         />
                       )}
                     </div>
@@ -3297,6 +3362,7 @@ function ChatViewInner({
           teamId={teamId}
           repository={repository}
           isPlanMode={isPlanMode}
+          chatMode={chatMode}
         />
       </div>
     </>
@@ -3337,6 +3403,7 @@ export function ChatView({
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [selectedModelId] = useAtom(lastSelectedModelIdAtom)
   const [isPlanMode] = useAtom(isPlanModeAtom)
+  const [chatMode] = useAtom(chatModeAtom)
   const setLoadingSubChats = useSetAtom(loadingSubChatsAtom)
   const unseenChanges = useAtomValue(agentsUnseenChangesAtom)
   const setUnseenChanges = useSetAtom(agentsUnseenChangesAtom)
@@ -3493,7 +3560,7 @@ export function ChatView({
   const agentSubChats = (agentChat?.subChats ?? []) as Array<{
     id: string
     name?: string | null
-    mode?: "plan" | "agent" | null
+    mode?: "plan" | "agent" | "ask" | null
     cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot" | null
     created_at?: Date | string | null
     updated_at?: Date | string | null
@@ -3929,7 +3996,7 @@ export function ChatView({
           createdAt ?? existingLocal?.created_at ?? new Date().toISOString(),
         updated_at: updatedAt ?? existingLocal?.updated_at,
         mode:
-          (sc.mode as "plan" | "agent" | undefined) ||
+          (sc.mode as "plan" | "agent" | "ask" | undefined) ||
           existingLocal?.mode ||
           "agent",
         cli:
@@ -4005,7 +4072,7 @@ export function ChatView({
       const subChatMeta = useAgentSubChatStore
         .getState()
         .allSubChats.find((sc) => sc.id === subChatId)
-      const subChatMode = subChatMeta?.mode || (isPlanMode ? "plan" : "agent")
+      const subChatMode = subChatMeta?.mode || chatMode
       // Read CLI from store (updated by dropdown) with fallback to DB value
       const subChatCli = (subChatMeta?.cli || subChat?.cli || "claude-code") as "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
 
@@ -4112,7 +4179,7 @@ export function ChatView({
   // Handle creating a new sub-chat
   const handleCreateNewSubChat = useCallback(async () => {
     const store = useAgentSubChatStore.getState()
-    const subChatMode = isPlanMode ? "plan" : "agent"
+    const subChatMode = chatMode
 
     // Inherit CLI from active sub-chat, or default to claude-code
     const activeSubChat = agentSubChats.find((sc) => sc.id === store.activeSubChatId)

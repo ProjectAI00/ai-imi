@@ -14,6 +14,7 @@ import {
 } from "../../../components/ui/dropdown-menu"
 import {
   AgentIcon,
+  AskIcon,
   AttachIcon,
   BranchIcon,
   CheckIcon,
@@ -43,6 +44,7 @@ import { Kbd } from "../../../components/ui/kbd"
 import { cn } from "../../../lib/utils"
 import {
   agentsDebugModeAtom,
+  chatModeAtom,
   isPlanModeAtom,
   justCreatedIdsAtom,
   lastSelectedAgentIdAtom,
@@ -54,6 +56,7 @@ import {
   selectedAgentChatIdAtom,
   selectedDraftIdAtom,
   selectedProjectAtom,
+  type ChatMode,
 } from "../atoms"
 import { ProjectSelector } from "../components/project-selector"
 import { WorkModeSelector } from "../components/work-mode-selector"
@@ -191,7 +194,8 @@ export function NewChatForm({
   const [lastSelectedModelPerAgent, setLastSelectedModelPerAgent] = useAtom(
     lastSelectedModelPerAgentAtom,
   )
-  const [isPlanMode, setIsPlanMode] = useAtom(isPlanModeAtom)
+  const [isPlanMode] = useAtom(isPlanModeAtom)
+  const [chatMode, setChatMode] = useAtom(chatModeAtom)
   const [workMode, setWorkMode] = useAtom(lastSelectedWorkModeAtom)
   const debugMode = useAtomValue(agentsDebugModeAtom)
   const setSettingsDialogOpen = useSetAtom(agentsSettingsDialogOpenAtom)
@@ -297,7 +301,7 @@ export function NewChatForm({
   const [modeTooltip, setModeTooltip] = useState<{
     visible: boolean
     position: { top: number; left: number }
-    mode: "agent" | "plan"
+    mode: ChatMode
   } | null>(null)
   const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hasShownTooltipRef = useRef(false)
@@ -746,7 +750,7 @@ export function NewChatForm({
       baseBranch:
         workMode === "worktree" ? selectedBranch || undefined : undefined,
       useWorktree: workMode === "worktree",
-      mode: isPlanMode ? "plan" : "agent",
+      mode: chatMode,
       cli: selectedAgent.id as "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot",
       model: selectedModel?.id,
     })
@@ -759,7 +763,7 @@ export function NewChatForm({
     workMode,
     images,
     files,
-    isPlanMode,
+    chatMode,
     selectedAgent,
     selectedModel,
   ])
@@ -864,13 +868,18 @@ export function NewChatForm({
             editorRef.current?.clear()
             break
           case "plan":
-            if (!isPlanMode) {
-              setIsPlanMode(true)
+            if (chatMode !== "plan") {
+              setChatMode("plan")
+            }
+            break
+          case "ask":
+            if (chatMode !== "ask") {
+              setChatMode("ask")
             }
             break
           case "agent":
-            if (isPlanMode) {
-              setIsPlanMode(false)
+            if (chatMode !== "agent") {
+              setChatMode("agent")
             }
             break
           // Prompt-based commands - auto-send to agent
@@ -897,7 +906,7 @@ export function NewChatForm({
         setTimeout(() => handleSend(), 0)
       }
     },
-    [isPlanMode, setIsPlanMode, handleSend],
+    [chatMode, setChatMode, handleSend],
   )
 
   // Paste handler for images and plain text
@@ -1211,7 +1220,11 @@ export function NewChatForm({
                       onCloseSlashTrigger={handleCloseSlashTrigger}
                       onContentChange={handleContentChange}
                       onSubmit={handleSend}
-                      onShiftTab={() => setIsPlanMode((prev) => !prev)}
+                      onShiftTab={() => {
+                        const modes: ChatMode[] = ["agent", "ask", "plan"]
+                        const idx = modes.indexOf(chatMode)
+                        setChatMode(modes[(idx + 1) % modes.length])
+                      }}
                       placeholder="Plan, @ for context, / for commands"
                       className={cn(
                         "bg-transparent max-h-[200px] overflow-y-auto p-1",
@@ -1241,12 +1254,20 @@ export function NewChatForm({
                         }}
                       >
                         <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                          {isPlanMode ? (
+                          {chatMode === "plan" ? (
                             <PlanIcon className="h-3.5 w-3.5" />
+                          ) : chatMode === "ask" ? (
+                            <AskIcon className="h-3.5 w-3.5" />
                           ) : (
                             <AgentIcon className="h-3.5 w-3.5" />
                           )}
-                          <span>{isPlanMode ? "Plan" : "Agent"}</span>
+                          <span>
+                            {chatMode === "plan"
+                              ? "Plan"
+                              : chatMode === "ask"
+                                ? "Ask"
+                                : "Agent"}
+                          </span>
                           <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
@@ -1263,7 +1284,7 @@ export function NewChatForm({
                                 tooltipTimeoutRef.current = null
                               }
                               setModeTooltip(null)
-                              setIsPlanMode(false)
+                              setChatMode("agent")
                               setModeDropdownOpen(false)
                             }}
                             className="justify-between gap-2"
@@ -1303,26 +1324,82 @@ export function NewChatForm({
                               setModeTooltip(null)
                             }}
                           >
-                            <div className="flex items-center gap-2">
-                              <AgentIcon className="w-4 h-4 text-muted-foreground" />
-                              <span>Agent</span>
-                            </div>
-                            {!isPlanMode && (
-                              <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
-                            )}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => {
-                              // Clear tooltip before closing dropdown (onMouseLeave won't fire)
-                              if (tooltipTimeoutRef.current) {
-                                clearTimeout(tooltipTimeoutRef.current)
-                                tooltipTimeoutRef.current = null
-                              }
-                              setModeTooltip(null)
-                              setIsPlanMode(true)
-                              setModeDropdownOpen(false)
-                            }}
-                            className="justify-between gap-2"
+                              <div className="flex items-center gap-2">
+                                <AgentIcon className="w-4 h-4 text-muted-foreground" />
+                                <span>Agent</span>
+                              </div>
+                              {chatMode === "agent" && (
+                                <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                              )}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                // Clear tooltip before closing dropdown (onMouseLeave won't fire)
+                                if (tooltipTimeoutRef.current) {
+                                  clearTimeout(tooltipTimeoutRef.current)
+                                  tooltipTimeoutRef.current = null
+                                }
+                                setModeTooltip(null)
+                                setChatMode("ask")
+                                setModeDropdownOpen(false)
+                              }}
+                              className="justify-between gap-2"
+                              onMouseEnter={(e) => {
+                                if (tooltipTimeoutRef.current) {
+                                  clearTimeout(tooltipTimeoutRef.current)
+                                  tooltipTimeoutRef.current = null
+                                }
+                                const rect =
+                                  e.currentTarget.getBoundingClientRect()
+                                const showTooltip = () => {
+                                  setModeTooltip({
+                                    visible: true,
+                                    position: {
+                                      top: rect.top,
+                                      left: rect.right + 8,
+                                    },
+                                    mode: "ask",
+                                  })
+                                  hasShownTooltipRef.current = true
+                                  tooltipTimeoutRef.current = null
+                                }
+                                if (hasShownTooltipRef.current) {
+                                  showTooltip()
+                                } else {
+                                  tooltipTimeoutRef.current = setTimeout(
+                                    showTooltip,
+                                    1000,
+                                  )
+                                }
+                              }}
+                              onMouseLeave={() => {
+                                if (tooltipTimeoutRef.current) {
+                                  clearTimeout(tooltipTimeoutRef.current)
+                                  tooltipTimeoutRef.current = null
+                                }
+                                setModeTooltip(null)
+                              }}
+                            >
+                              <div className="flex items-center gap-2">
+                                <AskIcon className="w-4 h-4 text-blue-500" />
+                                <span className="text-blue-600">Ask</span>
+                              </div>
+                              {chatMode === "ask" && (
+                                <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                              )}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                // Clear tooltip before closing dropdown (onMouseLeave won't fire)
+                                if (tooltipTimeoutRef.current) {
+                                  clearTimeout(tooltipTimeoutRef.current)
+                                  tooltipTimeoutRef.current = null
+                                }
+                                setModeTooltip(null)
+                                setChatMode("plan")
+                                setModeDropdownOpen(false)
+                              }}
+                              className="justify-between gap-2"
                             onMouseEnter={(e) => {
                               if (tooltipTimeoutRef.current) {
                                 clearTimeout(tooltipTimeoutRef.current)
@@ -1358,14 +1435,14 @@ export function NewChatForm({
                               setModeTooltip(null)
                             }}
                           >
-                            <div className="flex items-center gap-2">
-                              <PlanIcon className="w-4 h-4 text-muted-foreground" />
-                              <span>Plan</span>
-                            </div>
-                            {isPlanMode && (
-                              <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
-                            )}
-                          </DropdownMenuItem>
+                              <div className="flex items-center gap-2">
+                                <PlanIcon className="w-4 h-4 text-muted-foreground" />
+                                <span>Plan</span>
+                              </div>
+                              {chatMode === "plan" && (
+                                <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                              )}
+                            </DropdownMenuItem>
                         </DropdownMenuContent>
                         {modeTooltip?.visible &&
                           createPortal(
@@ -1384,6 +1461,8 @@ export function NewChatForm({
                                 <span>
                                   {modeTooltip.mode === "agent"
                                     ? "Apply changes directly without a plan"
+                                    : modeTooltip.mode === "ask"
+                                      ? "Conversational mode for any kind of question"
                                     : "Create a plan before making changes"}
                                 </span>
                               </div>
@@ -1512,6 +1591,7 @@ export function NewChatForm({
                           )}
                           onClick={handleSend}
                           isPlanMode={isPlanMode}
+                          chatMode={chatMode}
                         />
                       </div>
                     </div>
@@ -1701,6 +1781,7 @@ export function NewChatForm({
                   teamId={selectedTeamId || undefined}
                   repository={resolvedRepo?.full_name}
                   isPlanMode={isPlanMode}
+                  chatMode={chatMode}
                   disabledCommands={["clear"]}
                 />
               </div>

@@ -175,7 +175,7 @@ type IPCChatTransportConfig = {
   chatId: string
   subChatId: string
   cwd: string
-  mode: "plan" | "agent"
+  mode: "plan" | "agent" | "ask"
   model?: string
   cli?: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot" | "codex"
   taskId?: string  // Task being executed (for state engine)

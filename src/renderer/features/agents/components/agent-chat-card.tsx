@@ -39,7 +39,7 @@ function ChatIconWithBadge({
 }: {
   isLoading: boolean
   hasUnseenChanges: boolean
-  lastMode: "plan" | "agent"
+  lastMode: "plan" | "agent" | "ask"
   isSelected?: boolean
   gitOwner?: string | null
   gitProvider?: string | null

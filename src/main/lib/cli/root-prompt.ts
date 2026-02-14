@@ -261,7 +261,7 @@ export function getRootSystemPrompt(context?: {
   workspacePath?: string
   projectType?: string
   additionalContext?: string
-  mode?: "plan" | "agent"
+  mode?: "plan" | "agent" | "ask"
   isExecutingGoal?: boolean  // true when goalId or taskId provided
   mentionedFiles?: string[]
 }): string {

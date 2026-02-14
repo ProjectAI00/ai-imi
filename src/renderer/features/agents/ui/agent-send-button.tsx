@@ -16,6 +16,8 @@ interface AgentSendButtonProps {
   className?: string
   /** Whether this is plan mode (orange styling) */
   isPlanMode?: boolean
+  /** Current chat mode for styling */
+  chatMode?: "plan" | "agent" | "ask"
 }
 
 export function AgentSendButton({
@@ -26,6 +28,7 @@ export function AgentSendButton({
   onStop,
   className = "",
   isPlanMode = false,
+  chatMode,
 }: AgentSendButtonProps) {
   // Determine the actual click handler based on state
   const handleClick = () => {
@@ -60,6 +63,8 @@ export function AgentSendButton({
   // Apply glow effect when button is active and ready to send
   const shouldShowGlow = !isStreaming && !isSubmitting && !disabled
 
+  const effectiveMode = chatMode || (isPlanMode ? "plan" : "agent")
+
   return (
     <button
       type="button"
@@ -72,8 +77,10 @@ export function AgentSendButton({
         // Base styling
         "disabled:opacity-50 disabled:cursor-not-allowed",
         // Mode-specific styling
-        isPlanMode
+        effectiveMode === "plan"
           ? "bg-orange-500 hover:bg-orange-600 text-white"
+          : effectiveMode === "ask"
+          ? "bg-blue-500 hover:bg-blue-600 text-white"
           : "bg-foreground hover:bg-foreground/90 text-background",
         // Glow effect when ready
         shouldShowGlow && "shadow-[0_0_0_2px_white,0_0_0_4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_2px_#1a1a1a,0_0_0_4px_rgba(255,255,255,0.08)]",

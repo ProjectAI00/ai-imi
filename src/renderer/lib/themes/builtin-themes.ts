@@ -588,6 +588,71 @@ const CLAUDE_DARK: VSCodeFullTheme = {
 }
 
 /**
+ * imi Light theme colors
+ * Light gray with mint green accent — clean, geometric, Scandinavian
+ */
+const IMI_LIGHT: VSCodeFullTheme = {
+  id: "imi-light",
+  name: "imi Light",
+  type: "light",
+  source: "builtin",
+  colors: {
+    "editor.background": "#E8E8E8",
+    "editorPane.background": "#E8E8E8",
+    "editor.foreground": "#383838",
+    "foreground": "#383838",
+    "sideBar.background": "#D9D9D9",
+    "sideBar.foreground": "#383838",
+    "sideBar.border": "#D4D4D4",
+    "activityBar.background": "#D9D9D9",
+    "activityBar.foreground": "#383838",
+    "panel.background": "#D9D9D9",
+    "panel.border": "#D4D4D4",
+    "tab.activeBackground": "#E8E8E8",
+    "tab.inactiveBackground": "#D9D9D9",
+    "tab.inactiveForeground": "#808080",
+    "editorGroupHeader.tabsBackground": "#D9D9D9",
+    "dropdown.background": "#E0E0E0",
+    "dropdown.foreground": "#383838",
+    "input.background": "#DBDBDB",
+    "input.border": "#D4D4D4",
+    "input.foreground": "#383838",
+    "focusBorder": "#5CD882",
+    "textLink.foreground": "#4AB86A",
+    "textLink.activeForeground": "#3DA55C",
+    "list.activeSelectionBackground": "#5CD88230",
+    "list.hoverBackground": "#D4D4D4",
+    "editor.selectionBackground": "#5CD88233",
+    "editorLineNumber.foreground": "#A0A0A0",
+    "descriptionForeground": "#808080",
+    "errorForeground": "#dc2626",
+    "button.background": "#5CD882",
+    "button.foreground": "#1A1A1A",
+    "button.secondaryBackground": "#D4D4D4",
+    "button.secondaryForeground": "#383838",
+    // Terminal colors
+    "terminal.background": "#D9D9D9",
+    "terminal.foreground": "#383838",
+    "terminal.ansiBlack": "#383838",
+    "terminal.ansiRed": "#dc2626",
+    "terminal.ansiGreen": "#16a34a",
+    "terminal.ansiYellow": "#ca8a04",
+    "terminal.ansiBlue": "#2563eb",
+    "terminal.ansiMagenta": "#9333ea",
+    "terminal.ansiCyan": "#0891b2",
+    "terminal.ansiWhite": "#E8E8E8",
+    "terminal.ansiBrightBlack": "#808080",
+    "terminal.ansiBrightRed": "#ef4444",
+    "terminal.ansiBrightGreen": "#22c55e",
+    "terminal.ansiBrightYellow": "#eab308",
+    "terminal.ansiBrightBlue": "#3b82f6",
+    "terminal.ansiBrightMagenta": "#a855f7",
+    "terminal.ansiBrightCyan": "#06b6d4",
+    "terminal.ansiBrightWhite": "#F0F0F0",
+  },
+}
+
+/**
  * All built-in themes
  */
 export const BUILTIN_THEMES: VSCodeFullTheme[] = [
@@ -605,6 +670,7 @@ export const BUILTIN_THEMES: VSCodeFullTheme[] = [
   MIN_DARK,
   // Light themes
   CLAUDE_LIGHT,
+  IMI_LIGHT,
   VITESSE_LIGHT,
   MIN_LIGHT,
 ]

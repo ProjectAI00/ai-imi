@@ -11,7 +11,7 @@ export type Status = "todo" | "ongoing" | "review" | "done"
 export type Priority = "low" | "medium" | "high" | "urgent"
 
 // Execution mode
-export type ExecutionMode = "plan" | "agent"
+export type ExecutionMode = "plan" | "agent" | "ask"
 
 // Base metadata shared by all skeletons
 export interface BaseMetadata {

@@ -8,7 +8,7 @@
 export type ToolCategory = "execution" | "integration"
 
 // Tool mode - when the tool can be used
-export type ToolMode = "plan" | "agent" | "all"
+export type ToolMode = "plan" | "agent" | "ask" | "all"
 
 // Skill operation definition
 export interface SkillOperation {

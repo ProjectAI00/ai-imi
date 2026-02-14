@@ -72,7 +72,7 @@ electron.vite.config.*.mjs
 # Exclude internal planning docs
 PLAN-*.md
 ERROR-HANDLING.md
-docs/
+context/
 test-electron.js
 
 # Exclude internal release docs (contains credentials, CDN URLs)

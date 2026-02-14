@@ -44,6 +44,13 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommandOption[] = [
     description: "Switch to Agent mode (execute work)",
     category: "builtin",
   },
+  {
+    id: "builtin:ask",
+    name: "ask",
+    command: "/ask",
+    description: "Switch to Ask mode (conversation about anything)",
+    category: "builtin",
+  },
   // Goal/task commands
   {
     id: "builtin:goal",

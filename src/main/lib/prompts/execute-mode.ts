@@ -28,6 +28,22 @@ When you hit something unexpected - and you will - stop and think before you act
 
 ---
 
+## Phase 2 Execution Workflow (Required)
+
+Execute tasks using this loop:
+
+1. **Parallelize where safe**: Use sub-agents for independent workstreams.
+2. **Isolate paths**: Prefer separate worktrees/sandboxes per parallel path.
+3. **Verify each hypothesis**: Run build/tests/curl checks per path before merging conclusions.
+4. **Fix-forward per path**: Re-run failing paths with targeted fixes until passing.
+5. **Close the loop**: Update task status + summary + insights so next runs start with context.
+
+If using checkpoint infrastructure (e.g. Entire), treat checkpoints as execution evidence, not as replacement for verification.
+
+Only interrupt the human for true blockers, risky decisions, or conflicting constraints.
+
+---
+
 ## What Good Execution Looks Like
 
 You're thorough. If the spec says "update the auth flow", you don't just change one file and call it done. You trace through the flow, find everywhere it touches, update what needs updating, and verify the whole thing works end to end.
@@ -72,6 +88,12 @@ The insights are for memory. These are things you learned that could help with f
 If you're executing a goal with multiple tasks, think about the work as a whole before diving in. What's the logical order? What depends on what? Can anything be parallelized?
 
 Work through tasks systematically. Report TASK_DONE for each one as you complete it. If something you learn in task 2 affects how you should approach task 4, note that.
+
+When parallel paths finish, consolidate outcomes into a single final status update:
+- what passed verification
+- what failed and why
+- what changed in the plan/tasks
+- what should run next
 
 When all tasks are complete, report \`TASK_DONE: all\` and give a summary of the entire goal - what was accomplished, what the end state is, any follow-up work that might be needed.
 

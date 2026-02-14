@@ -60,6 +60,7 @@ interface AgentsSlashCommandProps {
   teamId?: string
   repository?: string
   isPlanMode?: boolean
+  chatMode?: "plan" | "agent" | "ask"
   disabledCommands?: string[]
 }
 
@@ -73,6 +74,7 @@ export const AgentsSlashCommand = memo(function AgentsSlashCommand({
   teamId,
   repository,
   isPlanMode,
+  chatMode,
   disabledCommands,
 }: AgentsSlashCommandProps) {
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -151,14 +153,12 @@ export const AgentsSlashCommand = memo(function AgentsSlashCommand({
   const options: SlashCommandOption[] = useMemo(() => {
     let builtinFiltered = filterBuiltinCommands(debouncedSearchText)
 
-    // Hide /plan when already in Plan mode, hide /agent when already in Agent mode
-    if (isPlanMode !== undefined) {
-      builtinFiltered = builtinFiltered.filter((cmd) => {
-        if (isPlanMode && cmd.name === "plan") return false
-        if (!isPlanMode && cmd.name === "agent") return false
-        return true
-      })
-    }
+    // Hide the command for the current mode (e.g. hide /plan when in plan mode)
+    const effectiveMode = chatMode || (isPlanMode ? "plan" : "agent")
+    builtinFiltered = builtinFiltered.filter((cmd) => {
+      if (cmd.name === effectiveMode) return false
+      return true
+    })
 
     // Filter out disabled commands
     if (disabledCommands && disabledCommands.length > 0) {
@@ -180,7 +180,7 @@ export const AgentsSlashCommand = memo(function AgentsSlashCommand({
 
     // Return builtin first, then repository commands
     return [...builtinFiltered, ...repoFiltered]
-  }, [debouncedSearchText, repoCommands, isPlanMode, disabledCommands])
+  }, [debouncedSearchText, repoCommands, isPlanMode, chatMode, disabledCommands])
 
   // Track previous values for smarter selection reset
   const prevIsOpenRef = useRef(isOpen)

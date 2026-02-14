@@ -12,7 +12,7 @@ export interface CliConfig {
   cwd: string
   model?: string
   sessionId?: string
-  mode?: "plan" | "agent"
+  mode?: "plan" | "agent" | "ask"
 }
 
 /**
@@ -24,7 +24,7 @@ export interface ChatInput {
   prompt: string
   cwd: string
   cli: "claude-code" | "opencode" | "cursor" | "amp" | "droid" | "copilot"
-  mode?: "plan" | "agent"
+  mode?: "plan" | "agent" | "ask"
   sessionId?: string
   model?: string
   images?: Array<{
