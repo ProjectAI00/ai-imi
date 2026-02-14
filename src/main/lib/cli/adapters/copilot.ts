@@ -208,6 +208,7 @@ export const copilotAdapter: CliAdapter = {
       let textStarted = false
       let isSubscriptionActive = true
       let accumulatedText = ""
+      let hasReceivedDeltas = false // Track if message_delta events delivered content
 
       // Safe emit that won't crash if subscription was cleaned up
       const safeEmit = (chunk: UIMessageChunk) => {
@@ -327,10 +328,29 @@ export const copilotAdapter: CliAdapter = {
           safeEmit({ type: "start" })
 
           // Promise that resolves when session becomes idle
+          // Uses an activity-aware timeout: resets on every SDK event so long-running
+          // agent sessions (tool calls, code generation, etc.) never time out mid-work.
           let resolveIdle: () => void
           const idlePromise = new Promise<void>((resolve) => {
             resolveIdle = resolve
           })
+          const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000 // 10 min of silence = something is wrong
+          let inactivityTimer: ReturnType<typeof setTimeout> | null = null
+          let rejectTimeout: ((err: Error) => void) | null = null
+          const timeoutPromise = new Promise<void>((_, reject) => {
+            rejectTimeout = reject
+            inactivityTimer = setTimeout(
+              () => reject(new Error(`Copilot session timed out after ${INACTIVITY_TIMEOUT_MS / 1000}s of inactivity`)),
+              INACTIVITY_TIMEOUT_MS,
+            )
+          })
+          const resetInactivityTimer = () => {
+            if (inactivityTimer) clearTimeout(inactivityTimer)
+            inactivityTimer = setTimeout(
+              () => rejectTimeout?.(new Error(`Copilot session timed out after ${INACTIVITY_TIMEOUT_MS / 1000}s of inactivity`)),
+              INACTIVITY_TIMEOUT_MS,
+            )
+          }
 
           // Subscribe to events for streaming - events fire in real-time
           const eventStart = Date.now()
@@ -339,6 +359,9 @@ export const copilotAdapter: CliAdapter = {
             console.log(`[Copilot SDK] [${elapsed}ms] Event: ${event.type}`)
             if (!isSubscriptionActive) return
 
+            // Reset inactivity timer on every event — agent is still working
+            resetInactivityTimer()
+
             switch (event.type) {
               case "assistant.message_delta":
                 // Streaming text chunk - emit immediately
@@ -346,6 +369,7 @@ export const copilotAdapter: CliAdapter = {
                   safeEmit({ type: "text-start", id: textId })
                   textStarted = true
                 }
+                hasReceivedDeltas = true
                 accumulatedText += event.data.deltaContent || ""
                 safeEmit({
                   type: "text-delta",
@@ -355,14 +379,35 @@ export const copilotAdapter: CliAdapter = {
                 break
 
               case "assistant.message":
-                if (!textStarted) {
-                  safeEmit({ type: "text-start", id: textId })
-                  textStarted = true
-                }
-                {
-                  const content = event.data?.content || ""
-                  accumulatedText += content
+                // Final message event contains the full text for this turn.
+                // Only emit if we didn't already stream it via message_delta.
+                if (!hasReceivedDeltas) {
+                  if (!textStarted) {
+                    safeEmit({ type: "text-start", id: textId })
+                    textStarted = true
+                  }
+                  // Extract content - handle both string and structured formats
+                  let content = ""
+                  const rawContent = event.data?.content
+                  if (typeof rawContent === "string") {
+                    content = rawContent
+                  } else if (Array.isArray(rawContent)) {
+                    // Structured content: [{ type: "text", text: "..." }, ...]
+                    content = rawContent
+                      .filter((c: any) => c.type === "text" && c.text)
+                      .map((c: any) => c.text)
+                      .join("")
+                  } else if (rawContent?.text) {
+                    content = rawContent.text
+                  }
+                  // Also check event.data.message for nested content
+                  if (!content && event.data?.message) {
+                    const msg = event.data.message
+                    if (typeof msg === "string") content = msg
+                    else if (typeof msg?.content === "string") content = msg.content
+                  }
                   if (content) {
+                    accumulatedText += content
                     safeEmit({
                       type: "text-delta",
                       id: textId,
@@ -370,6 +415,8 @@ export const copilotAdapter: CliAdapter = {
                     })
                   }
                 }
+                // Reset for next turn (after tool calls, a new turn may stream or not)
+                hasReceivedDeltas = false
                 break
 
               case "tool.execution_start":
@@ -453,10 +500,12 @@ export const copilotAdapter: CliAdapter = {
           console.log(`[Copilot SDK] [${Date.now() - sendStart}ms] send() returned, waiting for idle...`)
           
           // Wait for session to become idle (events continue streaming)
-          await idlePromise
+          // Race with inactivity timeout to prevent infinite hanging
+          await Promise.race([idlePromise, timeoutPromise])
           console.log(`[Copilot SDK] Session completed`)
 
           // Cleanup
+          if (inactivityTimer) clearTimeout(inactivityTimer)
           unsubscribe()
 
           if (textStarted) {
@@ -467,7 +516,7 @@ export const copilotAdapter: CliAdapter = {
           isSubscriptionActive = false
 
           activeSessions.delete(input.subChatId)
-          session.destroy().catch(() => {})
+          // Don't destroy the session - it may be resumed by the next message
 
         } catch (error: any) {
           console.error("[Copilot SDK] Error:", error)
