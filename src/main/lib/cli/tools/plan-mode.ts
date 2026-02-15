@@ -31,7 +31,7 @@ export function resolveAskUserResponse(toolCallId: string, response: { answers: 
   }
 }
 
-// Tool input schemas - aligned with skeleton types
+// Tool input schemas - aligned with DB schema (goals/tasks tables)
 const createGoalSchema = z.object({
   name: z.string().min(2).max(100).describe("Goal name (2-100 chars)"),
   description: z.string().min(10).describe("What success looks like (min 10 chars)"),
@@ -40,6 +40,7 @@ const createGoalSchema = z.object({
   workspaceId: z.string().optional().describe("Workspace/project ID"),
   context: z.string().optional().describe("Background info, constraints"),
   tags: z.array(z.string()).optional().describe("Optional tags for organization"),
+  relevantFiles: z.array(z.string()).optional().describe("Files relevant to this goal"),
 })
 
 // Raw JSON schema for SDK (Zod 3 doesn't have toJSONSchema)
@@ -53,6 +54,7 @@ const createGoalJsonSchema = {
     workspaceId: { type: "string", description: "Workspace/project ID" },
     context: { type: "string", description: "Background info, constraints" },
     tags: { type: "array", items: { type: "string" }, description: "Optional tags for organization" },
+    relevantFiles: { type: "array", items: { type: "string" }, description: "Files relevant to this goal" },
   },
   required: ["name", "description", "priority"],
 }
@@ -66,6 +68,8 @@ const createTaskSchema = z.object({
   context: z.string().optional().describe("Additional context for the task"),
   acceptanceCriteria: z.string().optional().describe("How we know the task is complete"),
   relevantFiles: z.array(z.string()).optional().describe("Files relevant to this task"),
+  workspacePath: z.string().optional().describe("Absolute path to work in"),
+  tools: z.array(z.string()).optional().describe("Tools needed: bash, edit, grep, web_search, etc."),
 })
 
 // Raw JSON schema for SDK
@@ -80,6 +84,8 @@ const createTaskJsonSchema = {
     context: { type: "string", description: "Additional context for the task" },
     acceptanceCriteria: { type: "string", description: "How we know the task is complete" },
     relevantFiles: { type: "array", items: { type: "string" }, description: "Files relevant to this task" },
+    workspacePath: { type: "string", description: "Absolute path to work in" },
+    tools: { type: "array", items: { type: "string" }, description: "Tools needed: bash, edit, grep, web_search, etc." },
   },
   required: ["goalId", "title", "description", "priority", "timeFrame"],
 }
@@ -108,6 +114,7 @@ const createGoalHandler: ToolHandler<CreateGoalInput> = async (args) => {
       workspacePath: input.workspacePath,
       context: input.context,
       tags: input.tags || [],
+      relevantFiles: input.relevantFiles || [],
       status: "draft",
     }
 
@@ -121,7 +128,7 @@ const createGoalHandler: ToolHandler<CreateGoalInput> = async (args) => {
       }
     }
 
-    // Insert to database
+    // Insert to database — status starts as "todo" (DB lifecycle status, not skeleton draft status)
     const goal = db
       .insert(goals)
       .values({
@@ -132,6 +139,7 @@ const createGoalHandler: ToolHandler<CreateGoalInput> = async (args) => {
         workspacePath: skeleton.workspacePath,
         context: skeleton.context,
         tags: JSON.stringify(skeleton.tags || []),
+        relevantFiles: JSON.stringify(skeleton.relevantFiles || []),
         status: "todo",
       })
       .returning()
@@ -169,6 +177,8 @@ const createTaskHandler: ToolHandler<CreateTaskInput> = async (args) => {
       context: input.context,
       acceptanceCriteria: input.acceptanceCriteria,
       relevantFiles: input.relevantFiles,
+      workspacePath: input.workspacePath,
+      tools: input.tools,
       assigneeType: "ai",
     }
 
@@ -183,7 +193,7 @@ const createTaskHandler: ToolHandler<CreateTaskInput> = async (args) => {
     // Calculate due date from timeFrame
     const dueDate = calculateDueDate(skeleton.timeFrame!)
 
-    // Insert to database
+    // Insert to database — all fields aligned with DB schema
     const db = getDatabase()
     const task = db
       .insert(tasks)
@@ -191,12 +201,16 @@ const createTaskHandler: ToolHandler<CreateTaskInput> = async (args) => {
         title: skeleton.title!,
         description: skeleton.description!,
         priority: skeleton.priority!,
+        timeFrame: skeleton.timeFrame!,
         goalId: input.goalId,
         status: "todo",
         dueDate: dueDate instanceof Date ? dueDate.getTime() : undefined,
         context: skeleton.context,
         acceptanceCriteria: skeleton.acceptanceCriteria,
         relevantFiles: skeleton.relevantFiles ? JSON.stringify(skeleton.relevantFiles) : undefined,
+        workspacePath: skeleton.workspacePath,
+        tools: skeleton.tools ? JSON.stringify(skeleton.tools) : undefined,
+        assigneeType: "ai",
         createdBy: "ai",
       })
       .returning()

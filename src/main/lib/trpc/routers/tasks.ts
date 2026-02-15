@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { router, publicProcedure } from "../index"
-import { getDatabase, tasks, agents, chats } from "../../db"
+import { getDatabase, tasks, agents, chats, goals } from "../../db"
 import { eq, desc, and, isNull } from "drizzle-orm"
 import {
   generateTaskPrompt,
@@ -10,6 +10,8 @@ import {
   calculateDueDate,
 } from "../../tasks"
 import type { TaskSkeleton } from "../../tasks"
+import { isValidTransition, isTerminalStatus } from "../../orchestration/status"
+import type { Status } from "../../orchestration/types"
 
 // Input schemas
 const taskSkeletonSchema = z.object({
@@ -231,7 +233,7 @@ export const tasksRouter = router({
     )
     .mutation(({ input }) => {
       const db = getDatabase()
-      return db
+      const updatedTask = db
         .update(tasks)
         .set({
           chatId: input.chatId,
@@ -241,6 +243,16 @@ export const tasksRouter = router({
         .where(eq(tasks.id, input.taskId))
         .returning()
         .get()
+      if (updatedTask?.goalId) {
+        db.update(goals)
+          .set({
+            status: "ongoing",
+            updatedAt: new Date(),
+          })
+          .where(eq(goals.id, updatedTask.goalId))
+          .run()
+      }
+      return updatedTask
     }),
 
   /**
@@ -394,7 +406,7 @@ export const tasksRouter = router({
       }
 
       // Update task with delegation info
-      return db
+      const updatedTask = db
         .update(tasks)
         .set({
           agentId: input.agentId || task.agentId,
@@ -404,6 +416,16 @@ export const tasksRouter = router({
         .where(eq(tasks.id, input.taskId))
         .returning()
         .get()
+      if (task.goalId) {
+        db.update(goals)
+          .set({
+            status: "ongoing",
+            updatedAt: new Date(),
+          })
+          .where(eq(goals.id, task.goalId))
+          .run()
+      }
+      return updatedTask
     }),
 
   /**
@@ -421,9 +443,14 @@ export const tasksRouter = router({
             timeFrame: z.enum(["today", "tomorrow", "this_week", "next_week", "no_rush"]).default("this_week"),
             context: z.string().optional(),
             tags: z.array(z.string()).optional(),
+            relevantFiles: z.array(z.string()).optional(),
+            workspacePath: z.string().optional(),
+            acceptanceCriteria: z.string().optional(),
+            tools: z.array(z.string()).optional(),
           })
         ),
         projectId: z.string().optional(),
+        workspaceId: z.string().optional(),
       })
     )
     .mutation(({ input }) => {
@@ -441,7 +468,12 @@ export const tasksRouter = router({
             description: taskInput.description,
             context: taskInput.context,
             linkedFiles: "[]",
+            relevantFiles: JSON.stringify(taskInput.relevantFiles || []),
+            workspacePath: taskInput.workspacePath,
+            acceptanceCriteria: taskInput.acceptanceCriteria,
+            tools: JSON.stringify(taskInput.tools || []),
             projectId: input.projectId,
+            workspaceId: input.workspaceId,
             goalId: input.goalId,
             assigneeType: "ai",
             tags: JSON.stringify(taskInput.tags || []),

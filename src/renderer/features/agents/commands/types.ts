@@ -35,6 +35,7 @@ export type BuiltinCommandAction =
   | { type: "clear" }
   | { type: "plan" }
   | { type: "agent" }
+  | { type: "ops" }
   // Goal/task commands (require picker, then send context)
   | { type: "goal"; goalId?: string }
   | { type: "task"; taskId?: string }

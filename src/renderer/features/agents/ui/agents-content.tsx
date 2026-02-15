@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 // import { useSearchParams, useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // Desktop: mock Next.js navigation hooks
@@ -16,6 +16,7 @@ import {
   agentsSidebarOpenAtom,
   agentsSubChatsSidebarModeAtom,
   agentsSubChatsSidebarWidthAtom,
+  selectedProjectAtom,
 } from "../atoms"
 import {
   selectedTeamIdAtom,
@@ -65,12 +66,14 @@ import { SubChatsQuickSwitchDialog } from "../components/subchats-quick-switch-d
 import { useArchiveChat } from "../../sidebar/hooks/use-archive-chat"
 import { isDesktopApp } from "../../../lib/utils/platform"
 import { TasksWorkspacePanel } from "./tasks-workspace-panel"
+import { toast } from "sonner"
 // Desktop mock
 const useIsAdmin = () => false
 
 // Main Component
 export function AgentsContent() {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const selectedProject = useAtomValue(selectedProjectAtom)
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
   const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
@@ -85,7 +88,9 @@ export function AgentsContent() {
   const navViewMode = useAtomValue(navViewModeAtom)
   const setNavViewMode = useSetAtom(navViewModeAtom)
   const selectedGoalId = useAtomValue(selectedGoalIdAtom)
+  const setSelectedGoalId = useSetAtom(selectedGoalIdAtom)
   const selectedTaskId = useAtomValue(selectedTaskIdAtom)
+  const setSelectedTaskId = useSetAtom(selectedTaskIdAtom)
 
   const hasOpenedSubChatsSidebar = useRef(false)
   const wasSubChatsSidebarOpen = useRef(false)
@@ -201,6 +206,53 @@ export function AgentsContent() {
       enabled: navViewMode === "tasks" && !!selectedGoalId,
     },
   )
+  const { data: projectChatsForTasks } = trpc.chats.list.useQuery(
+    { projectId: selectedProject?.id },
+    {
+      enabled: navViewMode === "tasks" && !!selectedProject?.id,
+    },
+  )
+  const trpcUtils = trpc.useUtils()
+  const createTaskChatMutation = trpc.chats.create.useMutation()
+  const linkTaskChatMutation = trpc.tasks.linkChat.useMutation()
+  const updateTaskMutation = trpc.tasks.update.useMutation()
+  const updateGoalMutation = trpc.goals.update.useMutation()
+  const openOpsChat = useCallback(async () => {
+    const projectId = selectedProject?.id || ((chatData as any)?.project?.id as string | undefined)
+    if (!projectId) {
+      toast.error("Unable to open IMI Ops", {
+        description: "Missing project context. Select a project and try again.",
+      })
+      return
+    }
+    const goal = selectedGoalForWorkspace
+    const desiredName = goal ? `IMI Ops · ${goal.name}` : "IMI Ops"
+    const existingOpsChat = projectChatsForTasks?.find((chat) => chat.name === desiredName)
+    if (existingOpsChat) {
+      setSelectedChatId(existingOpsChat.id)
+      setRightPanelMode("chat")
+      return
+    }
+    const createdChat = await createTaskChatMutation.mutateAsync({
+      projectId,
+      name: desiredName,
+      mode: "ask",
+      cli: "copilot",
+      goalId: goal?.id,
+    })
+    await trpcUtils.chats.list.invalidate()
+    setSelectedChatId(createdChat.id)
+    setRightPanelMode("chat")
+  }, [
+    selectedProject?.id,
+    chatData,
+    selectedGoalForWorkspace,
+    projectChatsForTasks,
+    createTaskChatMutation,
+    trpcUtils.chats.list,
+    setSelectedChatId,
+    setRightPanelMode,
+  ])
 
   // Archive chat mutation with proper navigation logic
   const archiveChatMutation = useArchiveChat({
@@ -1039,11 +1091,99 @@ export function AgentsContent() {
               <div className="flex-1 min-h-0">
                 <TasksWorkspacePanel
                   goal={selectedGoalForWorkspace}
+                  goals={goalsForWorkspace || []}
                   tasks={tasksForWorkspace || []}
                   selectedTaskId={selectedTaskId}
-                  onFollowUp={() => setRightPanelMode("chat")}
-                  onMoveChatBack={() => setRightPanelMode("chat")}
+                  onBackToTaskBar={() => {
+                    setSelectedGoalId(null)
+                    setSelectedTaskId(null)
+                  }}
+                  onBackFromTaskDetail={() => setSelectedTaskId(null)}
+                  onFollowUp={async () => {
+                    await openOpsChat()
+                  }}
+                  onMoveChatBack={() => {
+                    setRightPanelMode("closed")
+                    setNavViewMode("chats")
+                  }}
                   onOpenTasksSidebar={() => setSidebarOpen(true)}
+                  onSelectGoal={(goalId) => {
+                    setSelectedGoalId(goalId)
+                    setSelectedTaskId(null)
+                  }}
+                  onSelectTask={(taskId) => setSelectedTaskId(taskId)}
+                  onSaveGoalInput={async (goalId, input) => {
+                    const selectedGoal = goalsForWorkspace?.find((goal) => goal.id === goalId)
+                    const nextContext = selectedGoal?.context
+                      ? `${selectedGoal.context}\n\n[Input]\n${input}`
+                      : `[Input]\n${input}`
+                    await updateGoalMutation.mutateAsync({
+                      id: goalId,
+                      context: nextContext,
+                    })
+                    await trpcUtils.goals.list.invalidate()
+                    toast.success("Goal input saved", {
+                      description: "IMI will use this guidance across related task execution.",
+                    })
+                  }}
+                  onOpenTaskChat={async (taskId) => {
+                    const selectedTask = tasksForWorkspace?.find((task) => task.id === taskId)
+                    const linkedChatId = selectedTask?.chatId
+                    if (linkedChatId) {
+                      setSelectedChatId(linkedChatId)
+                      setRightPanelMode("chat")
+                      return
+                    }
+                    const projectId =
+                      selectedTask?.projectId ||
+                      selectedProject?.id ||
+                      ((chatData as any)?.project?.id as string | undefined)
+                    if (!selectedTask || !projectId) {
+                      toast.error("Unable to open task chat", {
+                        description: "Missing task or project context. Select a project and try again.",
+                      })
+                      return
+                    }
+                    try {
+                      const initialPrompt = `# Task: ${selectedTask.title}\n\n${selectedTask.description}\n\nPlease continue this task and share progress updates.`
+                      const createdChat = await createTaskChatMutation.mutateAsync({
+                        projectId,
+                        name: selectedTask.title,
+                        initialMessageParts: [{ type: "text", text: initialPrompt }],
+                        mode: "agent",
+                        cli: "copilot",
+                        goalId: selectedGoalId || undefined,
+                        taskId: selectedTask.id,
+                      })
+                      await linkTaskChatMutation.mutateAsync({
+                        taskId: selectedTask.id,
+                        chatId: createdChat.id,
+                      })
+                      await trpcUtils.tasks.list.invalidate()
+                      await trpcUtils.goals.list.invalidate()
+                      setSelectedChatId(createdChat.id)
+                      setRightPanelMode("chat")
+                    } catch (error) {
+                      toast.error("Failed to open task chat", {
+                        description: error instanceof Error ? error.message : "Unknown error",
+                      })
+                    }
+                  }}
+                  onSaveTaskInstruction={async (taskId, instruction) => {
+                    const selectedTask = tasksForWorkspace?.find((task) => task.id === taskId)
+                    if (!selectedTask) return
+                    const nextContext = selectedTask.context
+                      ? `${selectedTask.context}\n\n[Feedback]\n${instruction}`
+                      : `[Feedback]\n${instruction}`
+                    await updateTaskMutation.mutateAsync({
+                      id: taskId,
+                      context: nextContext,
+                    })
+                    await trpcUtils.tasks.list.invalidate()
+                    toast.success("Instruction saved", {
+                      description: "Open task chat to continue execution with this guidance.",
+                    })
+                  }}
                 />
               </div>
             </div>

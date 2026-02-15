@@ -452,7 +452,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 })
                 
                 // Show the appropriate login modal based on CLI type
-                const cli = chunk.cli
+                const cli = chunk.cli || currentCli
                 if (cli && cli !== "claude-code") {
                   // Show CLI-specific login modal for AMP, Droid, Cursor, etc.
                   appStore.set(cliLoginModalAtom, { open: true, cli })

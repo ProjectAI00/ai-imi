@@ -2,22 +2,23 @@
  * Status Transition Logic
  *
  * Manages valid status transitions and provides validation utilities.
+ * Status values match DB schema: "todo" | "in_progress" | "review" | "done"
  */
 
 import type { Status } from "./types"
 
 // Valid status transitions map
 const VALID_TRANSITIONS: Record<Status, Status[]> = {
-  todo: ["ongoing"],
-  ongoing: ["review", "done", "todo"], // can go back to todo if blocked
-  review: ["done", "ongoing"], // can go back to ongoing if needs changes
+  todo: ["in_progress"],
+  in_progress: ["review", "done", "todo"], // can go back to todo if blocked
+  review: ["done", "in_progress"], // can go back to in_progress if needs changes
   done: [], // terminal state
 }
 
 // Status metadata
 const STATUS_INFO: Record<Status, { label: string; color: string; icon: string }> = {
   todo: { label: "To Do", color: "gray", icon: "circle" },
-  ongoing: { label: "In Progress", color: "blue", icon: "play-circle" },
+  in_progress: { label: "In Progress", color: "blue", icon: "play-circle" },
   review: { label: "In Review", color: "yellow", icon: "eye" },
   done: { label: "Done", color: "green", icon: "check-circle" },
 }
@@ -48,7 +49,7 @@ export function isTerminalStatus(status: Status): boolean {
  * Check if status represents active work
  */
 export function isActiveStatus(status: Status): boolean {
-  return status === "ongoing" || status === "review"
+  return status === "in_progress" || status === "review"
 }
 
 /**
@@ -62,7 +63,7 @@ export function getStatusInfo(status: Status): { label: string; color: string; i
  * Validate a status value
  */
 export function isValidStatus(value: string): value is Status {
-  return ["todo", "ongoing", "review", "done"].includes(value)
+  return ["todo", "in_progress", "review", "done"].includes(value)
 }
 
 /**
@@ -79,7 +80,7 @@ export function transitionStatus(from: Status, to: Status): Status {
  * Get all statuses in order
  */
 export function getAllStatuses(): Status[] {
-  return ["todo", "ongoing", "review", "done"]
+  return ["todo", "in_progress", "review", "done"]
 }
 
 /**
@@ -89,7 +90,7 @@ export function getStatusProgress(status: Status): number {
   switch (status) {
     case "todo":
       return 0
-    case "ongoing":
+    case "in_progress":
       return 33
     case "review":
       return 66

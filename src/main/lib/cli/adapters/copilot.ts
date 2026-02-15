@@ -1,7 +1,7 @@
 import { spawn } from "child_process"
 import { observable } from "@trpc/server/observable"
 import type { CliAdapter, ChatInput, UIMessageChunk } from "../types"
-import { PLAN_MODE_TOOLS, setAskUserEmitter } from "../tools"
+import { PLAN_MODE_TOOLS, askUserTool, setAskUserEmitter } from "../tools"
 
 // Lazy-loaded Copilot SDK types and client
 let CopilotClientClass: typeof import("@github/copilot-sdk").CopilotClient | null = null
@@ -146,6 +146,7 @@ function resolveModel(model?: string): string | undefined {
   // Map UI model IDs to Copilot CLI model names
   const modelMap: Record<string, string> = {
     // Claude models (Copilot uses these)
+    "claude-opus-4.6": "claude-opus-4.6",
     "claude-sonnet-4.5": "claude-sonnet-4.5",
     "claude-haiku-4.5": "claude-haiku-4.5",
     "claude-opus-4.5": "claude-opus-4.5",
@@ -157,6 +158,7 @@ function resolveModel(model?: string): string | undefined {
     "sonnet-4": "claude-sonnet-4",
     // GPT models
     "gpt-5": "gpt-5",
+    "gpt-5.3-codex": "gpt-5.3-codex",
     "gpt-5.2": "gpt-5.2",
     "gpt-5.1": "gpt-5.1",
     "gpt-5.2-codex": "gpt-5.2-codex",
@@ -212,6 +214,8 @@ export const copilotAdapter: CliAdapter = {
       let hasReceivedDeltas = false // Track if message_delta events delivered content
       const emittedNonDeltaMessages = new Set<string>()
       const partialResultLogCounts = new Map<string, number>()
+      let sessionUnsubscribe: (() => void) | null = null
+      let inactivityTimer: ReturnType<typeof setTimeout> | null = null
 
       // Safe emit that won't crash if subscription was cleaned up
       const safeEmit = (chunk: UIMessageChunk) => {
@@ -253,6 +257,8 @@ export const copilotAdapter: CliAdapter = {
       userPromptParts.push(input.prompt)
       const userPrompt = userPromptParts.join("\n\n")
 
+      const sessionTools = input.mode === "plan" ? PLAN_MODE_TOOLS : [askUserTool]
+
       // Run the SDK session asynchronously
       const runSession = async () => {
         const runStart = Date.now()
@@ -269,7 +275,7 @@ export const copilotAdapter: CliAdapter = {
             try {
               console.log("[Copilot SDK] Resuming session:", input.sessionId)
               session = await client.resumeSession(input.sessionId, {
-                tools: input.mode === "plan" ? PLAN_MODE_TOOLS : undefined,
+                tools: sessionTools,
               })
               console.log("[Copilot SDK] Session resumed successfully")
             } catch (resumeErr) {
@@ -303,24 +309,18 @@ export const copilotAdapter: CliAdapter = {
               }
             }
 
-            // Add IMI custom tools for Plan Mode
-            // These tools let the AI create goals/tasks directly
-            if (input.mode === "plan") {
-              sessionConfig.tools = PLAN_MODE_TOOLS
-              console.log("[Copilot SDK] Plan mode - registered IMI tools:", PLAN_MODE_TOOLS.map(t => t.name))
-              
-              // Wire up the ask_user tool emitter so it can communicate with the UI
-              setAskUserEmitter(safeEmit)
-            }
+            sessionConfig.tools = sessionTools
+            console.log(
+              `[Copilot SDK] Registered tools (${input.mode} mode):`,
+              sessionTools.map((t) => t.name),
+            )
 
             const sessionCreateStart = Date.now()
             session = await client.createSession(sessionConfig)
             console.log(`[Copilot SDK] Session created in ${Date.now() - sessionCreateStart}ms`)
           }
-          // Ensure ask_user tool emitter is wired for this session
-          if (input.mode === "plan") {
-            setAskUserEmitter(safeEmit)
-          }
+          // Ensure ask_user tool emitter is wired for this session.
+          setAskUserEmitter(safeEmit)
 
           // Emit the session ID so it can be saved for future resume
           const currentSessionId = session.id || session.sessionId
@@ -344,7 +344,6 @@ export const copilotAdapter: CliAdapter = {
             resolveIdle = resolve
           })
           const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000 // 10 min of silence = something is wrong
-          let inactivityTimer: ReturnType<typeof setTimeout> | null = null
           let rejectTimeout: ((err: Error) => void) | null = null
           const timeoutPromise = new Promise<void>((_, reject) => {
             rejectTimeout = reject
@@ -363,7 +362,7 @@ export const copilotAdapter: CliAdapter = {
 
           // Subscribe to events for streaming - events fire in real-time
           const eventStart = Date.now()
-          const unsubscribe = session.on((event: any) => {
+          sessionUnsubscribe = session.on((event: any) => {
             const elapsed = Date.now() - eventStart
             console.log(`[Copilot SDK] [${elapsed}ms] Event: ${event.type}`)
             if (!isSubscriptionActive) return
@@ -530,7 +529,8 @@ export const copilotAdapter: CliAdapter = {
 
           // Cleanup
           if (inactivityTimer) clearTimeout(inactivityTimer)
-          unsubscribe()
+          sessionUnsubscribe?.()
+          sessionUnsubscribe = null
 
           if (textStarted) {
             safeEmit({ type: "text-end", id: textId })
@@ -584,6 +584,15 @@ export const copilotAdapter: CliAdapter = {
           safeEmit({ type: "finish" })
           safeComplete()
           activeSessions.delete(input.subChatId)
+        } finally {
+          if (inactivityTimer) {
+            clearTimeout(inactivityTimer)
+            inactivityTimer = null
+          }
+          if (sessionUnsubscribe) {
+            sessionUnsubscribe()
+            sessionUnsubscribe = null
+          }
         }
       }
 
@@ -598,6 +607,14 @@ export const copilotAdapter: CliAdapter = {
         isSubscriptionActive = false
         
         if (wasActive) {
+          if (inactivityTimer) {
+            clearTimeout(inactivityTimer)
+            inactivityTimer = null
+          }
+          if (sessionUnsubscribe) {
+            sessionUnsubscribe()
+            sessionUnsubscribe = null
+          }
           const activeSession = activeSessions.get(input.subChatId)
           if (activeSession) {
             activeSession.abort().catch((err) => {

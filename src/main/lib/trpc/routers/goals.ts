@@ -65,9 +65,11 @@ export const goalsRouter = router({
         name: z.string().min(2),
         description: z.string().min(5),
         workspaceId: z.string().optional(),
+        workspacePath: z.string().optional(),
         priority: prioritySchema.default("medium"),
         context: z.string().optional(),
         tags: z.array(z.string()).optional(),
+        relevantFiles: z.array(z.string()).optional(),
       })
     )
     .mutation(({ input }) => {
@@ -79,9 +81,11 @@ export const goalsRouter = router({
           name: input.name,
           description: input.description,
           workspaceId: input.workspaceId,
+          workspacePath: input.workspacePath,
           priority: input.priority,
           context: input.context,
           tags: JSON.stringify(input.tags || []),
+          relevantFiles: JSON.stringify(input.relevantFiles || []),
           status: "todo",
         })
         .returning()
@@ -125,11 +129,13 @@ export const goalsRouter = router({
         priority: prioritySchema.optional(),
         context: z.string().optional(),
         tags: z.array(z.string()).optional(),
+        workspacePath: z.string().optional(),
+        relevantFiles: z.array(z.string()).optional(),
       })
     )
     .mutation(({ input }) => {
       const db = getDatabase()
-      const { id, tags, ...rest } = input
+      const { id, tags, relevantFiles, ...rest } = input
 
       const updates: Record<string, unknown> = {
         ...rest,
@@ -138,6 +144,10 @@ export const goalsRouter = router({
 
       if (tags !== undefined) {
         updates.tags = JSON.stringify(tags)
+      }
+
+      if (relevantFiles !== undefined) {
+        updates.relevantFiles = JSON.stringify(relevantFiles)
       }
 
       return db.update(goals).set(updates).where(eq(goals.id, id)).returning().get()
@@ -225,6 +235,8 @@ export const goalsRouter = router({
         priority: prioritySchema.default("medium"),
         context: z.string().optional(),
         workspaceId: z.string().optional(),
+        workspacePath: z.string().optional(),
+        relevantFiles: z.array(z.string()).optional(),
       })
     )
     .mutation(({ input }) => {
@@ -236,9 +248,11 @@ export const goalsRouter = router({
           name: input.name,
           description: input.description,
           workspaceId: input.workspaceId,
+          workspacePath: input.workspacePath,
           priority: input.priority,
           context: input.context,
           tags: "[]",
+          relevantFiles: JSON.stringify(input.relevantFiles || []),
           status: "todo",
         })
         .returning()

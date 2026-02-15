@@ -68,7 +68,12 @@ import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import { trackMessageSent } from "../../../lib/analytics"
 import { apiFetch } from "../../../lib/api-fetch"
-import { soundNotificationsEnabledAtom } from "../../../lib/atoms"
+import {
+  navViewModeAtom,
+  selectedGoalIdAtom,
+  selectedTaskIdAtom,
+  soundNotificationsEnabledAtom,
+} from "../../../lib/atoms"
 import { appStore } from "../../../lib/jotai-store"
 import { api } from "../../../lib/mock-api"
 import { trpc, trpcClient } from "../../../lib/trpc"
@@ -1392,6 +1397,22 @@ function ChatViewInner({
   // Plan mode state (read from global atom)
   const [isPlanMode, setIsPlanMode] = useAtom(isPlanModeAtom)
   const [chatMode, setChatMode] = useAtom(chatModeAtom)
+  const navViewMode = useAtomValue(navViewModeAtom)
+  const setNavViewMode = useSetAtom(navViewModeAtom)
+  const setSelectedGoalId = useSetAtom(selectedGoalIdAtom)
+  const setSelectedTaskId = useSetAtom(selectedTaskIdAtom)
+  const openOpsModeFromCurrentContext = useCallback(async () => {
+    setNavViewMode("tasks")
+    try {
+      const chatData = await trpcClient.chats.get.query({ id: parentChatId })
+      const currentSubChat = chatData?.subChats?.find((sc: any) => sc.id === subChatId)
+      setSelectedGoalId(currentSubChat?.goalId || null)
+      setSelectedTaskId(currentSubChat?.taskId || null)
+    } catch {
+      setSelectedGoalId(null)
+      setSelectedTaskId(null)
+    }
+  }, [parentChatId, subChatId, setNavViewMode, setSelectedGoalId, setSelectedTaskId])
 
   // Mutation for updating sub-chat mode in database
   const updateSubChatModeMutation = api.agents.updateSubChatMode.useMutation({
@@ -1605,6 +1626,7 @@ function ChatViewInner({
   const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hasShownTooltipRef = useRef(false)
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
+  const isOpsUiMode = navViewMode === "tasks"
 
   // Track chat changes for rename trigger reset
   const chatRef = useRef<Chat<any> | null>(null)
@@ -2237,6 +2259,62 @@ function ChatViewInner({
     if (!hasText && !hasImages) return
 
     const text = inputValue.trim()
+    const navigateToWorkspaceTarget = async (rawText: string) => {
+      const opsCommand = /^\/ops$/i.exec(rawText)
+      if (opsCommand) {
+        await openOpsModeFromCurrentContext()
+        return true
+      }
+
+      const goalCommand = /^\/goal\s+(.+)$/i.exec(rawText)
+      if (goalCommand) {
+        const query = goalCommand[1].trim().toLowerCase()
+        const goals = await trpcClient.goals.list.query()
+        const exactById = goals.find((goal: any) => goal.id.toLowerCase() === query)
+        const startsById = goals.find((goal: any) => goal.id.toLowerCase().startsWith(query))
+        const exactByName = goals.find((goal: any) => goal.name.toLowerCase() === query)
+        const includesByName = goals.find((goal: any) => goal.name.toLowerCase().includes(query))
+        const match = exactById || startsById || exactByName || includesByName
+        if (!match) {
+          toast.error("Goal not found", { description: `No goal matches "${goalCommand[1].trim()}".` })
+          return true
+        }
+        setNavViewMode("tasks")
+        setSelectedGoalId(match.id)
+        setSelectedTaskId(null)
+        return true
+      }
+
+      const taskCommand = /^\/task\s+(.+)$/i.exec(rawText)
+      if (taskCommand) {
+        const query = taskCommand[1].trim().toLowerCase()
+        const allTasks = await trpcClient.tasks.list.query()
+        const exactById = allTasks.find((task: any) => task.id.toLowerCase() === query)
+        const startsById = allTasks.find((task: any) => task.id.toLowerCase().startsWith(query))
+        const exactByTitle = allTasks.find((task: any) => task.title.toLowerCase() === query)
+        const includesByTitle = allTasks.find((task: any) => task.title.toLowerCase().includes(query))
+        const match = exactById || startsById || exactByTitle || includesByTitle
+        if (!match) {
+          toast.error("Task not found", { description: `No task matches "${taskCommand[1].trim()}".` })
+          return true
+        }
+        setNavViewMode("tasks")
+        setSelectedGoalId(match.goalId || null)
+        setSelectedTaskId(match.id)
+        return true
+      }
+
+      return false
+    }
+
+    if (text.startsWith("/")) {
+      const handled = await navigateToWorkspaceTarget(text)
+      if (handled) {
+        editorRef.current?.clear()
+        return
+      }
+    }
+
     // Clear editor and draft from localStorage
     editorRef.current?.clear()
     currentDraftTextRef.current = ""
@@ -2373,6 +2451,9 @@ function ChatViewInner({
           case "ask":
             setChatMode("ask")
             break
+          case "ops":
+            void openOpsModeFromCurrentContext()
+            break
           // Prompt-based commands - auto-send to agent
           case "goals":
           case "tasks": {
@@ -2385,12 +2466,11 @@ function ChatViewInner({
             }
             break
           }
-          // Goal/task picker commands - TODO: show picker UI
+          // Goal/task navigation commands - set input template for direct jump
           case "goal":
           case "task": {
-            // For now, show a toast that this feature is coming
-            // TODO: implement goal/task picker dropdown
-            console.log(`[Command] ${command.name} picker not yet implemented`)
+            editorRef.current?.setValue(`/${command.name} `)
+            editorRef.current?.focus()
             break
           }
         }
@@ -2403,7 +2483,7 @@ function ChatViewInner({
         setTimeout(() => handleSend(), 0)
       }
     },
-    [chatMode, setChatMode, handleSend, onCreateNewSubChat],
+    [chatMode, setChatMode, setNavViewMode, setSelectedGoalId, setSelectedTaskId, openOpsModeFromCurrentContext, handleSend, onCreateNewSubChat],
   )
 
   // Paste handler for images and plain text
@@ -2918,14 +2998,16 @@ function ChatViewInner({
                     >
                       <DropdownMenuTrigger asChild>
                         <button className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                          {chatMode === "plan" ? (
+                          {isOpsUiMode ? (
+                            <ListTree className="h-3.5 w-3.5" />
+                          ) : chatMode === "plan" ? (
                             <PlanIcon className="h-3.5 w-3.5" />
                           ) : chatMode === "ask" ? (
                             <AskIcon className="h-3.5 w-3.5" />
                           ) : (
                             <AgentIcon className="h-3.5 w-3.5" />
                           )}
-                          <span>{chatMode === "plan" ? "Plan" : chatMode === "ask" ? "Ask" : "Agent"}</span>
+                          <span>{isOpsUiMode ? "Ops" : chatMode === "plan" ? "Plan" : chatMode === "ask" ? "Ask" : "Agent"}</span>
                           <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                         </button>
                       </DropdownMenuTrigger>
@@ -2986,7 +3068,7 @@ function ChatViewInner({
                             <AgentIcon className="w-4 h-4 text-muted-foreground" />
                             <span>Agent</span>
                           </div>
-                          {chatMode === "agent" && (
+                          {!isOpsUiMode && chatMode === "agent" && (
                             <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                           )}
                         </DropdownMenuItem>
@@ -3041,7 +3123,7 @@ function ChatViewInner({
                             <AskIcon className="w-4 h-4 text-muted-foreground" />
                             <span>Ask</span>
                           </div>
-                          {chatMode === "ask" && (
+                          {!isOpsUiMode && chatMode === "ask" && (
                             <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                           )}
                         </DropdownMenuItem>
@@ -3096,7 +3178,27 @@ function ChatViewInner({
                             <PlanIcon className="w-4 h-4 text-muted-foreground" />
                             <span>Plan</span>
                           </div>
-                          {chatMode === "plan" && (
+                          {!isOpsUiMode && chatMode === "plan" && (
+                            <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
+                          )}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            if (tooltipTimeoutRef.current) {
+                              clearTimeout(tooltipTimeoutRef.current)
+                              tooltipTimeoutRef.current = null
+                            }
+                            setModeTooltip(null)
+                            await openOpsModeFromCurrentContext()
+                            setModeDropdownOpen(false)
+                          }}
+                          className="justify-between gap-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <ListTree className="w-4 h-4 text-muted-foreground" />
+                            <span>Ops</span>
+                          </div>
+                          {isOpsUiMode && (
                             <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                           )}
                         </DropdownMenuItem>

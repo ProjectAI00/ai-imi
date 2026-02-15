@@ -890,11 +890,6 @@ export const claudeRouter = router({
 
         // Helper to safely complete (no-op if already closed)
         const safeComplete = () => {
-          if (textDeltaFlushTimeout) {
-            clearTimeout(textDeltaFlushTimeout)
-            textDeltaFlushTimeout = null
-          }
-          flushTextDeltas()
           try {
             emit.complete()
           } catch {
@@ -1868,11 +1863,6 @@ export const claudeRouter = router({
         return () => {
           console.log(`[SD] M:CLEANUP sub=${subId} sessionId=${currentSessionId || 'none'}`)
           isObservableActive = false // Prevent emit after unsubscribe
-          if (textDeltaFlushTimeout) {
-            clearTimeout(textDeltaFlushTimeout)
-            textDeltaFlushTimeout = null
-          }
-          pendingTextDeltas = []
           abortController.abort()
           activeSessions.delete(input.subChatId)
           clearPendingApprovals("Session ended.", input.subChatId)

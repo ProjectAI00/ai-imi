@@ -18,4 +18,5 @@ This folder is optimized for fast AI ingestion.
 - [modules/README.md](modules/README.md)
 - [founder-intent.md](founder-intent.md)
 - [product-purpose.md](product-purpose.md)
+- [philosophy.md](philosophy.md)
 

@@ -4,8 +4,8 @@
  * Shared types for all builders and orchestration components.
  */
 
-// Status types for tasks and skeletons
-export type Status = "todo" | "ongoing" | "review" | "done"
+// Status types for tasks and skeletons — aligned with DB schema
+export type Status = "todo" | "in_progress" | "review" | "done"
 
 // Priority levels
 export type Priority = "low" | "medium" | "high" | "urgent"

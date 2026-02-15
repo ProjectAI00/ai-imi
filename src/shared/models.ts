@@ -88,8 +88,10 @@ export const droidModels = [
 export const copilotModels = [
     { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5" },
     { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
+    { id: "claude-opus-4.6", name: "Claude Opus 4.6" },
     { id: "claude-opus-4.5", name: "Claude Opus 4.5" },
     { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
     { id: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
     { id: "gpt-5.1-codex-max", name: "GPT-5.1 Codex Max" },
     { id: "gpt-5.1-codex", name: "GPT-5.1 Codex" },
@@ -112,6 +114,7 @@ export type CliType = "claude-code" | "opencode" | "cursor" | "amp" | "droid" | 
  * @see https://openai.com/codex
  */
 export const codexModels = [
+    { id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
     { id: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
     { id: "gpt-5.1-codex", name: "GPT-5.1 Codex" },
     { id: "gpt-5-codex", name: "GPT-5 Codex" },
