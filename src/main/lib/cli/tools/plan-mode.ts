@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod"
-import { getDatabase, goals, tasks } from "../../db"
+import { getDatabase, goals, tasks, workspaces } from "../../db"
 import { validateGoalSkeleton, createEmptyGoalSkeleton } from "../../goals/builder"
 import { calculateDueDate } from "../../tasks"
 import type { GoalSkeleton, PriorityValue } from "../../goals/types"
@@ -36,8 +36,8 @@ const createGoalSchema = z.object({
   name: z.string().min(2).max(100).describe("Goal name (2-100 chars)"),
   description: z.string().min(10).describe("What success looks like (min 10 chars)"),
   priority: z.enum(["low", "medium", "high"]).describe("Goal priority"),
-  workspacePath: z.string().describe("Absolute path to project folder"),
-  workspaceId: z.string().describe("Workspace/project ID"),
+  workspacePath: z.string().optional().describe("Absolute path to project folder"),
+  workspaceId: z.string().optional().describe("Workspace/project ID"),
   context: z.string().optional().describe("Background info, constraints"),
   tags: z.array(z.string()).optional().describe("Optional tags for organization"),
 })
@@ -54,7 +54,7 @@ const createGoalJsonSchema = {
     context: { type: "string", description: "Background info, constraints" },
     tags: { type: "array", items: { type: "string" }, description: "Optional tags for organization" },
   },
-  required: ["name", "description", "priority", "workspacePath", "workspaceId"],
+  required: ["name", "description", "priority"],
 }
 
 const createTaskSchema = z.object({
@@ -93,6 +93,10 @@ export type CreateTaskInput = z.infer<typeof createTaskSchema>
 const createGoalHandler: ToolHandler<CreateGoalInput> = async (args) => {
   try {
     const input = createGoalSchema.parse(args)
+    const db = getDatabase()
+
+    const fallbackWorkspace = db.select().from(workspaces).limit(1).get()
+    const resolvedWorkspaceId = input.workspaceId || fallbackWorkspace?.id || ""
 
     // Build a GoalSkeleton from input
     const skeleton: Partial<GoalSkeleton> = {
@@ -100,7 +104,7 @@ const createGoalHandler: ToolHandler<CreateGoalInput> = async (args) => {
       name: input.name,
       description: input.description,
       priority: input.priority as PriorityValue,
-      workspaceId: input.workspaceId,
+      workspaceId: resolvedWorkspaceId,
       workspacePath: input.workspacePath,
       context: input.context,
       tags: input.tags || [],
@@ -118,13 +122,13 @@ const createGoalHandler: ToolHandler<CreateGoalInput> = async (args) => {
     }
 
     // Insert to database
-    const db = getDatabase()
     const goal = db
       .insert(goals)
       .values({
         name: skeleton.name!,
         description: skeleton.description!,
         priority: skeleton.priority!,
+        workspaceId: skeleton.workspaceId,
         workspacePath: skeleton.workspacePath,
         context: skeleton.context,
         tags: JSON.stringify(skeleton.tags || []),

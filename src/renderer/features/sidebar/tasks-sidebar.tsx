@@ -5,11 +5,11 @@
  * Breadcrumb navigation for clarity
  */
 
-import { useState, useMemo } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { useAtom, useSetAtom } from "jotai"
 import { motion, AnimatePresence } from "motion/react"
 import { trpc } from "../../lib/trpc"
-import { selectedTaskIdAtom } from "../../lib/atoms"
+import { selectedGoalIdAtom, selectedTaskIdAtom } from "../../lib/atoms"
 import { selectedAgentChatIdAtom, selectedProjectAtom } from "../agents/atoms"
 import { cn } from "../../lib/utils"
 import { Button } from "../../components/ui/button"
@@ -83,6 +83,7 @@ export function TasksSidebar({
   onWorkspaceSelect,
 }: TasksSidebarProps) {
   const [selectedTaskId, setSelectedTaskId] = useAtom(selectedTaskIdAtom)
+  const setSelectedGoalId = useSetAtom(selectedGoalIdAtom)
   const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
   const [selectedProject] = useAtom(selectedProjectAtom)
   const [searchQuery, setSearchQuery] = useState("")
@@ -90,6 +91,23 @@ export function TasksSidebar({
   const [navState, setNavState] = useState<NavState>({ view: "goals" })
   const [showNewWorkspaceInput, setShowNewWorkspaceInput] = useState(false)
   const [newWorkspaceName, setNewWorkspaceName] = useState("")
+
+  useEffect(() => {
+    if (navState.view === "goals") {
+      setSelectedGoalId(null)
+      setSelectedTaskId(null)
+      return
+    }
+
+    if (navState.view === "goal") {
+      setSelectedGoalId(navState.goalId)
+      setSelectedTaskId(null)
+      return
+    }
+
+    setSelectedGoalId(navState.goalId)
+    setSelectedTaskId(navState.taskId)
+  }, [navState, setSelectedGoalId, setSelectedTaskId])
 
   // Fetch goals
   const { data: goals, isLoading: goalsLoading } = trpc.goals.list.useQuery()

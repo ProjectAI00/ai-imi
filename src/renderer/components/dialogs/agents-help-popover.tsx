@@ -36,12 +36,14 @@ export function AgentsHelpPopover({
     {
       icon: RoadmapIcon,
       label: "Roadmap",
-      onClick: () => window.open("https://agentsby21st.featurebase.app/roadmap", "_blank"),
+      onClick: () =>
+        window.open("https://github.com/ProjectAI00/ai-imi/projects", "_blank"),
     },
     {
       icon: TicketIcon,
       label: "Feature Request",
-      onClick: () => window.open("https://agentsby21st.featurebase.app", "_blank"),
+      onClick: () =>
+        window.open("https://github.com/ProjectAI00/ai-imi/issues/new/choose", "_blank"),
     },
   ]
 

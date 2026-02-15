@@ -395,6 +395,7 @@ export const navViewModeAtom = atomWithStorage<NavViewMode>(
 
 // Selected task ID (when viewing tasks)
 export const selectedTaskIdAtom = atom<string | null>(null)
+export const selectedGoalIdAtom = atom<string | null>(null)
 
 // Selected workspace (persisted)
 export type SelectedWorkspace = {

@@ -207,13 +207,15 @@ export const copilotAdapter: CliAdapter = {
       const textId = `copilot-text-${Date.now()}`
       let textStarted = false
       let isSubscriptionActive = true
+      let isStreamClosed = false
       let accumulatedText = ""
       let hasReceivedDeltas = false // Track if message_delta events delivered content
       const emittedNonDeltaMessages = new Set<string>()
+      const partialResultLogCounts = new Map<string, number>()
 
       // Safe emit that won't crash if subscription was cleaned up
       const safeEmit = (chunk: UIMessageChunk) => {
-        if (!isSubscriptionActive) {
+        if (!isSubscriptionActive || isStreamClosed) {
           console.log("[Copilot SDK] Skipping emit - subscription inactive")
           return
         }
@@ -224,12 +226,18 @@ export const copilotAdapter: CliAdapter = {
           }
           emit.next(chunk)
         } catch (err) {
-          console.error("[Copilot SDK] Error:", err)
+          const errorCode = (err as { code?: string } | null)?.code
+          if (errorCode !== "ERR_INVALID_STATE") {
+            console.error("[Copilot SDK] Error:", err)
+          }
           isSubscriptionActive = false
+          isStreamClosed = true
         }
       }
       const safeComplete = () => {
-        if (!isSubscriptionActive) return
+        if (isStreamClosed) return
+        isSubscriptionActive = false
+        isStreamClosed = true
         try {
           emit.complete()
         } catch {
@@ -448,11 +456,18 @@ export const copilotAdapter: CliAdapter = {
                 break
 
               case "tool.execution_partial_result":
-                console.log(`[Copilot SDK] Tool partial result:`, event.data?.toolCallId)
+                {
+                  const toolCallId = event.data?.toolCallId || "unknown"
+                  const count = (partialResultLogCounts.get(toolCallId) || 0) + 1
+                  partialResultLogCounts.set(toolCallId, count)
+                  if (count === 1 || count % 20 === 0) {
+                    console.log(`[Copilot SDK] Tool partial result (${count}):`, toolCallId)
+                  }
+                }
                 break
 
               case "tool.execution_progress":
-                console.log(`[Copilot SDK] Tool progress:`, event.data?.progressMessage)
+                // Progress events are high-frequency; keep logs concise.
                 break
 
               case "tool.execution_complete":
@@ -522,7 +537,6 @@ export const copilotAdapter: CliAdapter = {
           }
           safeEmit({ type: "finish" })
           safeComplete()
-          isSubscriptionActive = false
 
           activeSessions.delete(input.subChatId)
           // Don't destroy the session - it may be resumed by the next message
@@ -568,9 +582,7 @@ export const copilotAdapter: CliAdapter = {
           }
 
           safeEmit({ type: "finish" })
-          // CRITICAL: Call safeComplete() BEFORE setting inactive
           safeComplete()
-          isSubscriptionActive = false
           activeSessions.delete(input.subChatId)
         }
       }

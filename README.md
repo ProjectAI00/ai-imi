@@ -1,8 +1,6 @@
-# 1Code
+# IMI
 
-Best UI for Claude Code with local and remote agent execution.
-
-By [21st.dev](https://21st.dev)
+AI ops workspace for technical product teams, with local and remote agent execution.
 
 ## Features
 
@@ -24,11 +22,9 @@ bun run build
 bun run package:mac  # or package:win, package:linux
 ```
 
-### Option 2: Subscribe to 1code.dev (recommended)
+### Option 2: Download beta builds
 
-Get pre-built releases + background agents support by subscribing at [1code.dev](https://1code.dev).
-
-Your subscription helps us maintain and improve 1Code.
+Get the latest beta build from [GitHub Releases](https://github.com/ProjectAI00/ai-imi/releases).
 
 ## Development
 
@@ -36,6 +32,14 @@ Your subscription helps us maintain and improve 1Code.
 bun install
 bun run dev
 ```
+
+## Contributing
+
+We welcome contributions from the community.
+
+1. Fork this repository
+2. Create a feature branch
+3. Open a pull request with a clear description
 
 ## Feedback & Community
 

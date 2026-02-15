@@ -27,6 +27,9 @@ import {
   isAgentMultiSelectModeAtom,
   clearAgentChatSelectionAtom,
   ctrlTabTargetAtom,
+  navViewModeAtom,
+  selectedGoalIdAtom,
+  selectedTaskIdAtom,
 } from "../../../lib/atoms"
 import { NewChatForm } from "../main/new-chat-form"
 import { ChatView } from "../main/active-chat"
@@ -61,6 +64,7 @@ import { AgentsQuickSwitchDialog } from "../components/agents-quick-switch-dialo
 import { SubChatsQuickSwitchDialog } from "../components/subchats-quick-switch-dialog"
 import { useArchiveChat } from "../../sidebar/hooks/use-archive-chat"
 import { isDesktopApp } from "../../../lib/utils/platform"
+import { TasksWorkspacePanel } from "./tasks-workspace-panel"
 // Desktop mock
 const useIsAdmin = () => false
 
@@ -78,6 +82,10 @@ export function AgentsContent() {
   )
   const setTerminalSidebarOpen = useSetAtom(terminalSidebarOpenAtom)
   const [rightPanelMode, setRightPanelMode] = useAtom(rightPanelModeAtom)
+  const navViewMode = useAtomValue(navViewModeAtom)
+  const setNavViewMode = useSetAtom(navViewModeAtom)
+  const selectedGoalId = useAtomValue(selectedGoalIdAtom)
+  const selectedTaskId = useAtomValue(selectedTaskIdAtom)
 
   const hasOpenedSubChatsSidebar = useRef(false)
   const wasSubChatsSidebarOpen = useRef(false)
@@ -163,6 +171,35 @@ export function AgentsContent() {
   const { data: chatData } = api.agents.getAgentChat.useQuery(
     { chatId: selectedChatId! },
     { enabled: !!selectedChatId },
+  )
+
+  // In Tasks view, keep chat docked on the right and workspace in center.
+  useEffect(() => {
+    if (navViewMode !== "tasks" || !selectedChatId) return
+    if (rightPanelMode !== "chat") {
+      setRightPanelMode("chat")
+    }
+  }, [navViewMode, selectedChatId, rightPanelMode, setRightPanelMode])
+
+  // In Chats view, prioritize full-width center chat instead of right-docked chat mode.
+  useEffect(() => {
+    if (navViewMode !== "chats") return
+    if (rightPanelMode === "chat") {
+      setRightPanelMode("closed")
+    }
+  }, [navViewMode, rightPanelMode, setRightPanelMode])
+  const { data: goalsForWorkspace } = trpc.goals.list.useQuery(undefined, {
+    enabled: navViewMode === "tasks",
+  })
+  const selectedGoalForWorkspace = useMemo(() => {
+    if (!selectedGoalId || !goalsForWorkspace) return null
+    return goalsForWorkspace.find((goal) => goal.id === selectedGoalId) || null
+  }, [selectedGoalId, goalsForWorkspace])
+  const { data: tasksForWorkspace } = trpc.tasks.list.useQuery(
+    { goalId: selectedGoalId || undefined },
+    {
+      enabled: navViewMode === "tasks" && !!selectedGoalId,
+    },
   )
 
   // Archive chat mutation with proper navigation logic
@@ -916,6 +953,7 @@ export function AgentsContent() {
                     ? () => {
                         // Toggle: closed -> chat -> terminal -> closed
                         if (rightPanelMode === "closed") {
+                          setNavViewMode("tasks")
                           setRightPanelMode("chat")
                         } else if (rightPanelMode === "chat") {
                           setRightPanelMode("terminal")
@@ -979,7 +1017,37 @@ export function AgentsContent() {
           className="flex-1 min-w-0 overflow-hidden bg-background rounded-[14px] shadow-sm"
           style={{ minWidth: "350px" }}
         >
-          {selectedChatId && rightPanelMode !== "chat" ? (
+          {navViewMode === "tasks" ? (
+            <div className="h-full flex flex-col bg-background rounded-[14px]">
+              <div className="flex items-center h-10 px-2 flex-shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setSidebarOpen((prev) => !prev)}
+                      className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+                    >
+                      <IconSidebarToggle className="h-4 w-4 scale-x-[-1]" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {sidebarOpen ? "Close" : "Open"} sidebar<span className="ml-1.5 text-muted-foreground">⌘\</span>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="flex-1 min-h-0">
+                <TasksWorkspacePanel
+                  goal={selectedGoalForWorkspace}
+                  tasks={tasksForWorkspace || []}
+                  selectedTaskId={selectedTaskId}
+                  onFollowUp={() => setRightPanelMode("chat")}
+                  onMoveChatBack={() => setRightPanelMode("chat")}
+                  onOpenTasksSidebar={() => setSidebarOpen(true)}
+                />
+              </div>
+            </div>
+          ) : selectedChatId && (navViewMode === "chats" || rightPanelMode !== "chat") ? (
             <div className="h-full flex flex-col relative overflow-hidden">
               <ChatView
                 key={selectedChatId}
@@ -996,6 +1064,7 @@ export function AgentsContent() {
                 onOpenChatPanel={() => {
                   // Toggle right panel: closed -> chat -> terminal -> closed
                   if (rightPanelMode === "closed") {
+                    setNavViewMode("tasks")
                     setRightPanelMode("chat")
                   } else if (rightPanelMode === "chat") {
                     setRightPanelMode("terminal")
@@ -1026,7 +1095,6 @@ export function AgentsContent() {
                   </TooltipContent>
                 </Tooltip>
               </div>
-              {/* Centered content */}
               <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
                 <p className="text-sm">Chat moved to right panel</p>
                 <button
