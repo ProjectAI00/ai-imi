@@ -2,6 +2,8 @@
 
 AI ops workspace for technical product teams, with local and remote agent execution.
 
+![IMI tasks workspace](docs/images/tasks-workspace.png)
+
 ## Features
 
 - **Plan & Agent Modes** - Read-only analysis or full code execution permissions
@@ -10,6 +12,10 @@ AI ops workspace for technical product teams, with local and remote agent execut
 - **Git Worktree Isolation** - Each chat session runs in its own isolated worktree
 - **Integrated Terminal** - Full terminal access within the app
 - **Change Tracking** - Visual diffs and PR management
+
+## Next
+
+Next: AI Agent Builder Mode for consistent workflows and automation co-workers in-app, closing the product loop end-to-end.
 
 ## Installation
 

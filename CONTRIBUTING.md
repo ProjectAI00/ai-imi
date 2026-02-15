@@ -1,4 +1,4 @@
-# Contributing to 1Code
+# Contributing to IMI
 
 ## Building from Source
 
@@ -13,9 +13,9 @@ bun run package:mac  # Create distributable
 
 ## Open Source vs Hosted Version
 
-This is the open-source version of 1Code. Some features require the hosted backend at 1code.dev:
+This is the open-source version of IMI. Some features require the hosted backend at aibyimi.com:
 
-| Feature | Open Source | Hosted (1code.dev) |
+| Feature | Open Source | Hosted (aibyimi.com) |
 |---------|-------------|-------------------|
 | Local AI chat | Yes | Yes |
 | Claude Code integration | Yes | Yes |
