@@ -1,0 +1,740 @@
+#!/usr/bin/env bash
+# imi — AI-native product ops state engine
+# The shared brain for your AI coding agents.
+#
+# Install:  curl -fsSL https://imi.sh/install | bash
+# Or:       curl -fsSL https://raw.githubusercontent.com/ProjectAI00/ai-imi/main/scripts/imi -o ~/.local/bin/imi && chmod +x ~/.local/bin/imi
+#
+# Any AI agent (Copilot, Claude Code, Cursor, etc.) can call these commands.
+# Add to your project's CLAUDE.md / .github/copilot-instructions.md:
+#   "Use `imi status` to see current goals/tasks. Use `imi complete <id> <summary>` when done."
+
+set -euo pipefail
+
+# --- Config ---
+VERSION="0.2.0"
+
+# DB discovery: check env, then project-local, then global
+_find_db() {
+  if [ -n "${IMI_DB:-}" ] && [ -f "$IMI_DB" ]; then echo "$IMI_DB"; return; fi
+  # Project-local .imi/state.db (portable, works with any agent)
+  local dir="${PWD}"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.imi/state.db" ]; then echo "$dir/.imi/state.db"; return; fi
+    dir="$(dirname "$dir")"
+  done
+  # Global fallback (shared with Electron app if installed)
+  local global_db
+  if [ "$(uname)" = "Darwin" ]; then
+    global_db="$HOME/Library/Application Support/Agents Dev/data/agents.db"
+  else
+    global_db="${XDG_DATA_HOME:-$HOME/.local/share}/imi/state.db"
+  fi
+  echo "$global_db"
+}
+
+DB_PATH="$(_find_db)"
+
+# --- Output mode: human (default) or json (for agents) ---
+OUTPUT="${IMI_OUTPUT:-human}"
+if [[ " $* " == *" --json "* ]]; then OUTPUT="json"; fi
+
+# --- Colors (disabled in json mode or non-TTY) ---
+if [ "$OUTPUT" = "json" ] || [ ! -t 1 ]; then
+  RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; DIM=''; BOLD=''; NC=''
+else
+  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+  BLUE='\033[0;34m'; CYAN='\033[0;36m'; DIM='\033[2m'; BOLD='\033[1m'; NC='\033[0m'
+fi
+
+# Strip --json from args
+ARGS=()
+for arg in "$@"; do [ "$arg" != "--json" ] && ARGS+=("$arg"); done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+# --- Auto-init DB if missing ---
+_init_db() {
+  local db_dir
+  db_dir="$(dirname "$DB_PATH")"
+  mkdir -p "$db_dir"
+  sqlite3 "$DB_PATH" <<'SQL'
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  workspace_id TEXT,
+  status TEXT NOT NULL DEFAULT 'todo',
+  priority TEXT NOT NULL DEFAULT 'medium',
+  context TEXT,
+  tags TEXT DEFAULT '[]',
+  workspace_path TEXT,
+  relevant_files TEXT DEFAULT '[]',
+  created_at INTEGER,
+  updated_at INTEGER,
+  completed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  context TEXT,
+  linked_files TEXT DEFAULT '[]',
+  project_id TEXT,
+  workspace_id TEXT,
+  assignee_type TEXT NOT NULL DEFAULT 'ai',
+  agent_id TEXT,
+  team_id TEXT,
+  tags TEXT DEFAULT '[]',
+  time_frame TEXT NOT NULL DEFAULT 'this_week',
+  due_date INTEGER,
+  priority TEXT NOT NULL DEFAULT 'medium',
+  status TEXT NOT NULL DEFAULT 'todo',
+  chat_id TEXT,
+  summary TEXT,
+  goal_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  plan_id TEXT,
+  execution_format TEXT DEFAULT 'json',
+  execution_payload TEXT,
+  workspace_path TEXT,
+  relevant_files TEXT DEFAULT '[]',
+  tools TEXT DEFAULT '[]',
+  acceptance_criteria TEXT,
+  created_at INTEGER,
+  updated_at INTEGER,
+  completed_at INTEGER,
+  created_by TEXT NOT NULL DEFAULT 'user'
+);
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY NOT NULL,
+  goal_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'agent',
+  created_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS memories_goal_id_idx ON memories(goal_id);
+SQL
+}
+
+ensure_db() {
+  if [ ! -f "$DB_PATH" ]; then
+    _init_db
+    if [ "$OUTPUT" = "human" ]; then
+      echo -e "${GREEN}●${NC} Initialized IMI database at ${DIM}$DB_PATH${NC}"
+    fi
+  fi
+}
+
+sql() {
+  sqlite3 -json "$DB_PATH" "$1" 2>/dev/null
+}
+
+sql_json() {
+  sqlite3 "$DB_PATH" "$1" 2>/dev/null
+}
+
+sql_raw() {
+  sqlite3 "$DB_PATH" "$1" 2>/dev/null
+}
+
+sql_exec() {
+  sqlite3 "$DB_PATH" "$1" 2>/dev/null
+}
+
+now_ms() {
+  python3 -c "import time; print(int(time.time()*1000))"
+}
+
+gen_id() {
+  python3 -c "
+import time, random
+ts = int(time.time() * 1000)
+base36_ts = ''
+n = ts
+while n > 0:
+    base36_ts = '0123456789abcdefghijklmnopqrstuvwxyz'[n % 36] + base36_ts
+    n //= 36
+rand = ''.join(random.choices('0123456789abcdefghijklmnopqrstuvwxyz', k=8))
+print(base36_ts + rand)
+"
+}
+
+# JSON output helper
+json_out() {
+  if [ "$OUTPUT" = "json" ]; then
+    echo "$1"
+    return 0
+  fi
+  return 1
+}
+
+status_icon() {
+  case "$1" in
+    todo)        echo "○" ;;
+    in_progress) echo "◐" ;;
+    ongoing)     echo "◐" ;;
+    review)      echo "◑" ;;
+    done)        echo "●" ;;
+    blocked)     echo "✕" ;;
+    *)           echo "?" ;;
+  esac
+}
+
+status_color() {
+  case "$1" in
+    todo)        echo "$DIM" ;;
+    in_progress) echo "$YELLOW" ;;
+    ongoing)     echo "$YELLOW" ;;
+    review)      echo "$CYAN" ;;
+    done)        echo "$GREEN" ;;
+    blocked)     echo "$RED" ;;
+    *)           echo "$NC" ;;
+  esac
+}
+
+priority_label() {
+  case "$1" in
+    high)   echo -e "${RED}▲${NC}" ;;
+    medium) echo -e "${YELLOW}■${NC}" ;;
+    low)    echo -e "${DIM}▽${NC}" ;;
+    *)      echo " " ;;
+  esac
+}
+
+time_ago() {
+  local ms_ts="$1"
+  if [ -z "$ms_ts" ] || [ "$ms_ts" = "null" ]; then echo "—"; return; fi
+  python3 -c "
+import time
+diff = time.time() - ($ms_ts / 1000)
+if diff < 60: print(f'{int(diff)}s ago')
+elif diff < 3600: print(f'{int(diff/60)}m ago')
+elif diff < 86400: print(f'{int(diff/3600)}h ago')
+else: print(f'{int(diff/86400)}d ago')
+"
+}
+
+# --- Commands ---
+
+cmd_status() {
+  ensure_db
+
+  if [ "$OUTPUT" = "json" ]; then
+    sql_json "SELECT json_object(
+      'goals', (SELECT json_group_array(json_object(
+        'id', g.id, 'name', g.name, 'status', g.status, 'priority', g.priority,
+        'description', g.description, 'context', g.context,
+        'tasks_total', (SELECT count(*) FROM tasks WHERE goal_id=g.id),
+        'tasks_done', (SELECT count(*) FROM tasks WHERE goal_id=g.id AND status='done'),
+        'tasks', (SELECT json_group_array(json_object(
+          'id', t.id, 'title', t.title, 'status', t.status, 'priority', t.priority,
+          'summary', t.summary, 'description', t.description
+        )) FROM tasks t WHERE t.goal_id=g.id)
+      )) FROM goals g),
+      'memories', (SELECT json_group_array(json_object(
+        'id', m.id, 'key', m.key, 'value', m.value, 'goal_id', m.goal_id, 'source', m.source
+      )) FROM memories m),
+      'stats', json_object(
+        'goals', (SELECT count(*) FROM goals),
+        'tasks', (SELECT count(*) FROM tasks),
+        'done', (SELECT count(*) FROM tasks WHERE status='done'),
+        'in_progress', (SELECT count(*) FROM tasks WHERE status='in_progress'),
+        'memories', (SELECT count(*) FROM memories)
+      )
+    )"
+    return
+  fi
+
+  local goals tasks_total tasks_done tasks_progress memories
+  goals=$(sql_raw "SELECT count(*) FROM goals")
+  tasks_total=$(sql_raw "SELECT count(*) FROM tasks")
+  tasks_done=$(sql_raw "SELECT count(*) FROM tasks WHERE status='done'")
+  tasks_progress=$(sql_raw "SELECT count(*) FROM tasks WHERE status='in_progress'")
+  tasks_review=$(sql_raw "SELECT count(*) FROM tasks WHERE status='review'")
+  memories=$(sql_raw "SELECT count(*) FROM memories")
+
+  echo -e "${BOLD}IMI State Engine${NC}  ${DIM}v${VERSION}${NC}"
+  echo -e "${DIM}DB: $DB_PATH${NC}"
+  echo ""
+  echo -e "  ${BOLD}Goals${NC}       $goals"
+  echo -e "  ${BOLD}Tasks${NC}       $tasks_total  ${GREEN}●${tasks_done} done${NC}  ${YELLOW}◐${tasks_progress} wip${NC}  ${CYAN}◑${tasks_review} review${NC}  ${DIM}○$((tasks_total - tasks_done - tasks_progress - tasks_review)) todo${NC}"
+  echo -e "  ${BOLD}Memories${NC}    $memories"
+  echo ""
+
+  while IFS='|' read -r gid gname gstatus gpriority; do
+    [ -z "$gid" ] && continue
+    local icon sc
+    icon=$(status_icon "$gstatus")
+    sc=$(status_color "$gstatus")
+    local done_count total_count
+    done_count=$(sql_raw "SELECT count(*) FROM tasks WHERE goal_id='$gid' AND status='done'")
+    total_count=$(sql_raw "SELECT count(*) FROM tasks WHERE goal_id='$gid'")
+    echo -e "  ${sc}${icon}${NC} $(priority_label "$gpriority") ${BOLD}${gname}${NC}  ${DIM}(${done_count}/${total_count})${NC}  ${DIM}${gid:0:10}${NC}"
+    
+    while IFS='|' read -r tid ttitle tstatus tpriority; do
+      [ -z "$tid" ] && continue
+      local ticon tsc
+      ticon=$(status_icon "$tstatus")
+      tsc=$(status_color "$tstatus")
+      echo -e "    ${tsc}${ticon}${NC} $(priority_label "$tpriority") ${ttitle}  ${DIM}${tid:0:10}${NC}"
+    done < <(sql_raw "SELECT id, title, status, priority FROM tasks WHERE goal_id='$gid' ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END, created_at" ".separator |")
+    echo ""
+  done < <(sql_raw "SELECT id, name, status, priority FROM goals ORDER BY CASE status WHEN 'ongoing' THEN 0 WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END, created_at" ".separator |")
+}
+
+cmd_goals() {
+  ensure_db
+  if [ "$OUTPUT" = "json" ]; then
+    sql_json "SELECT json_group_array(json_object('id', id, 'name', name, 'status', status, 'priority', priority, 'description', description)) FROM goals ORDER BY created_at DESC"
+    return
+  fi
+  echo -e "${BOLD}Goals${NC}"
+  echo ""
+  while IFS='|' read -r gid gname gstatus gpriority gcreated; do
+    [ -z "$gid" ] && continue
+    local icon sc ago
+    icon=$(status_icon "$gstatus")
+    sc=$(status_color "$gstatus")
+    ago=$(time_ago "$gcreated")
+    local done_count total_count
+    done_count=$(sql_raw "SELECT count(*) FROM tasks WHERE goal_id='$gid' AND status='done'")
+    total_count=$(sql_raw "SELECT count(*) FROM tasks WHERE goal_id='$gid'")
+    echo -e "  ${sc}${icon}${NC} $(priority_label "$gpriority") ${BOLD}${gname}${NC}"
+    echo -e "    ${DIM}${gid}  ${done_count}/${total_count} tasks  ${ago}${NC}"
+  done < <(sql_raw "SELECT id, name, status, priority, created_at FROM goals ORDER BY created_at DESC" ".separator |")
+}
+
+cmd_tasks() {
+  ensure_db
+  local filter="${1:-all}"
+  
+  local where_clause=""
+  case "$filter" in
+    todo)    where_clause="WHERE t.status='todo'" ;;
+    wip)     where_clause="WHERE t.status='in_progress'" ;;
+    review)  where_clause="WHERE t.status='review'" ;;
+    done)    where_clause="WHERE t.status='done'" ;;
+    all)     where_clause="" ;;
+    *)       where_clause="WHERE t.goal_id='$filter' OR t.id LIKE '$filter%'" ;;
+  esac
+
+  if [ "$OUTPUT" = "json" ]; then
+    sql_json "SELECT json_group_array(json_object('id', t.id, 'title', t.title, 'status', t.status, 'priority', t.priority, 'summary', t.summary, 'goal_id', t.goal_id, 'goal_name', g.name, 'description', t.description)) FROM tasks t LEFT JOIN goals g ON t.goal_id=g.id $where_clause ORDER BY t.created_at"
+    return
+  fi
+
+  echo -e "${BOLD}Tasks${NC}  ${DIM}(filter: $filter)${NC}"
+  echo ""
+
+  while IFS='|' read -r tid ttitle tstatus tpriority gname; do
+    [ -z "$tid" ] && continue
+    local icon sc
+    icon=$(status_icon "$tstatus")
+    sc=$(status_color "$tstatus")
+    echo -e "  ${sc}${icon}${NC} $(priority_label "$tpriority") ${ttitle}"
+    echo -e "    ${DIM}${tid}  ← ${gname:-no goal}${NC}"
+  done < <(sql_raw "SELECT t.id, t.title, t.status, t.priority, g.name FROM tasks t LEFT JOIN goals g ON t.goal_id=g.id $where_clause ORDER BY CASE t.status WHEN 'in_progress' THEN 0 WHEN 'review' THEN 1 WHEN 'todo' THEN 2 WHEN 'done' THEN 3 END, t.created_at" ".separator |")
+}
+
+cmd_context() {
+  ensure_db
+  local target="${1:-}"
+
+  if [ "$OUTPUT" = "json" ]; then
+    if [ -z "$target" ]; then
+      sql_json "SELECT json_object(
+        'goals', (SELECT json_group_array(json_object('id',g.id,'name',g.name,'status',g.status,'description',g.description,
+          'tasks_done',(SELECT count(*) FROM tasks WHERE goal_id=g.id AND status='done'),
+          'tasks_total',(SELECT count(*) FROM tasks WHERE goal_id=g.id)
+        )) FROM goals g WHERE g.status!='done'),
+        'in_progress_tasks', (SELECT json_group_array(json_object('id',t.id,'title',t.title,'goal',g.name)) FROM tasks t JOIN goals g ON t.goal_id=g.id WHERE t.status='in_progress'),
+        'memories', (SELECT json_group_array(json_object('key',m.key,'value',m.value)) FROM memories m ORDER BY m.created_at DESC LIMIT 20)
+      )"
+    else
+      local full_gid
+      full_gid=$(sql_raw "SELECT id FROM goals WHERE id LIKE '${target}%' LIMIT 1")
+      [ -z "$full_gid" ] && echo '{"error":"Goal not found"}' && return 1
+      sql_json "SELECT json_object(
+        'id','$full_gid',
+        'name',(SELECT name FROM goals WHERE id='$full_gid'),
+        'status',(SELECT status FROM goals WHERE id='$full_gid'),
+        'description',(SELECT description FROM goals WHERE id='$full_gid'),
+        'context',(SELECT context FROM goals WHERE id='$full_gid'),
+        'tasks',(SELECT json_group_array(json_object('id',t.id,'title',t.title,'status',t.status,'summary',t.summary,'description',t.description)) FROM tasks t WHERE t.goal_id='$full_gid'),
+        'memories',(SELECT json_group_array(json_object('key',m.key,'value',m.value)) FROM memories m WHERE m.goal_id='$full_gid')
+      )"
+    fi
+    return
+  fi
+  
+  if [ -z "$target" ]; then
+    # Global context — all goals, recent activity, memories
+    echo -e "${BOLD}IMI Context (Global)${NC}"
+    echo ""
+    
+    echo -e "${CYAN}Active Goals:${NC}"
+    while IFS='|' read -r gname gstatus done_ct total_ct; do
+      [ -z "$gname" ] && continue
+      echo -e "  $(status_icon "$gstatus") $gname ($done_ct/$total_ct done)"
+    done < <(sql_raw "SELECT g.name, g.status, (SELECT count(*) FROM tasks WHERE goal_id=g.id AND status='done'), (SELECT count(*) FROM tasks WHERE goal_id=g.id) FROM goals g WHERE g.status != 'done' ORDER BY g.created_at" ".separator |")
+    
+    echo ""
+    echo -e "${CYAN}In-Progress Tasks:${NC}"
+    while IFS='|' read -r ttitle gname; do
+      [ -z "$ttitle" ] && continue
+      echo -e "  ◐ $ttitle  ${DIM}← $gname${NC}"
+    done < <(sql_raw "SELECT t.title, g.name FROM tasks t JOIN goals g ON t.goal_id=g.id WHERE t.status='in_progress'" ".separator |")
+    
+    echo ""
+    echo -e "${CYAN}Memories (${DIM}$(sql_raw "SELECT count(*) FROM memories")${NC}${CYAN}):${NC}"
+    while IFS='|' read -r mkey mvalue; do
+      [ -z "$mkey" ] && continue
+      echo -e "  ${BOLD}$mkey${NC}: $mvalue"
+    done < <(sql_raw "SELECT key, value FROM memories ORDER BY created_at DESC LIMIT 10" ".separator |")
+    
+  else
+    # Goal-specific context
+    local goal_row
+    goal_row=$(sql_raw "SELECT id, name, description, status, context FROM goals WHERE id LIKE '$target%' LIMIT 1" ".separator |")
+    if [ -z "$goal_row" ]; then
+      echo -e "${RED}Goal not found: $target${NC}"
+      return 1
+    fi
+    
+    IFS='|' read -r gid gname gdesc gstatus gcontext <<< "$goal_row"
+    echo -e "${BOLD}$gname${NC}  $(status_icon "$gstatus") $gstatus"
+    [ -n "$gdesc" ] && echo -e "${DIM}$gdesc${NC}"
+    [ -n "$gcontext" ] && echo -e "\n${CYAN}Context:${NC} $gcontext"
+    
+    echo ""
+    echo -e "${CYAN}Tasks:${NC}"
+    while IFS='|' read -r tid ttitle tstatus tsummary; do
+      [ -z "$tid" ] && continue
+      echo -e "  $(status_icon "$tstatus") $ttitle  ${DIM}${tid:0:10}${NC}"
+      [ -n "$tsummary" ] && [ "$tsummary" != "" ] && echo -e "    ${DIM}↳ $tsummary${NC}"
+    done < <(sql_raw "SELECT id, title, status, summary FROM tasks WHERE goal_id='$gid' ORDER BY created_at" ".separator |")
+    
+    echo ""
+    echo -e "${CYAN}Memories:${NC}"
+    local mem_count
+    mem_count=$(sql_raw "SELECT count(*) FROM memories WHERE goal_id='$gid'")
+    if [ "$mem_count" = "0" ]; then
+      echo -e "  ${DIM}(none)${NC}"
+    else
+      while IFS='|' read -r mkey mvalue; do
+        echo -e "  ${BOLD}$mkey${NC}: $mvalue"
+      done < <(sql_raw "SELECT key, value FROM memories WHERE goal_id='$gid' ORDER BY created_at" ".separator |")
+    fi
+  fi
+}
+
+cmd_add_goal() {
+  ensure_db
+  local name="${1:?Usage: imi add-goal <name> [description] [priority]}"
+  local desc="${2:-$name}"
+  local priority="${3:-medium}"
+  local id workspace_path
+  id=$(gen_id)
+  workspace_path="$(pwd)"
+  
+  sql_exec "INSERT INTO goals (id, name, description, status, priority, context, tags, workspace_path, relevant_files, created_at, updated_at) VALUES ('$id', '$(echo "$name" | sed "s/'/''/g")', '$(echo "$desc" | sed "s/'/''/g")', 'todo', '$priority', '', '[]', '$workspace_path', '[]', $(now_ms), $(now_ms))"
+  
+  if [ "$OUTPUT" = "json" ]; then
+    echo "{\"ok\":true,\"id\":\"$id\",\"name\":\"$name\"}"
+    return
+  fi
+  echo -e "${GREEN}●${NC} Goal created: ${BOLD}$name${NC}"
+  echo -e "  ${DIM}$id${NC}"
+}
+
+cmd_add_task() {
+  ensure_db
+  local goal_id="${1:?Usage: imi add-task <goal_id> <title> [description] [priority]}"
+  local title="${2:?Usage: imi add-task <goal_id> <title> [description] [priority]}"
+  local desc="${3:-$title}"
+  local priority="${4:-medium}"
+  
+  # Resolve partial goal ID
+  local full_gid
+  full_gid=$(sql_raw "SELECT id FROM goals WHERE id LIKE '${goal_id}%' LIMIT 1")
+  if [ -z "$full_gid" ]; then
+    echo -e "${RED}Goal not found: $goal_id${NC}"
+    return 1
+  fi
+  
+  local id
+  id=$(gen_id)
+  
+  sql_exec "INSERT INTO tasks (id, title, description, status, priority, goal_id, assignee_type, created_by, created_at, updated_at) VALUES ('$id', '$(echo "$title" | sed "s/'/''/g")', '$(echo "$desc" | sed "s/'/''/g")', 'todo', '$priority', '$full_gid', 'ai', 'user', $(now_ms), $(now_ms))"
+  
+  if [ "$OUTPUT" = "json" ]; then
+    echo "{\"ok\":true,\"id\":\"$id\",\"goal_id\":\"$full_gid\",\"title\":\"$title\"}"
+    return
+  fi
+  echo -e "${GREEN}●${NC} Task created: ${BOLD}$title${NC}"
+  echo -e "  ${DIM}$id → goal $full_gid${NC}"
+}
+
+cmd_start() {
+  ensure_db
+  local task_id="${1:?Usage: imi start <task_id>}"
+  
+  local full_tid
+  full_tid=$(sql_raw "SELECT id FROM tasks WHERE id LIKE '${task_id}%' LIMIT 1")
+  if [ -z "$full_tid" ]; then
+    echo -e "${RED}Task not found: $task_id${NC}"
+    return 1
+  fi
+  
+  sql_exec "UPDATE tasks SET status='in_progress', updated_at=$(now_ms) WHERE id='$full_tid'"
+  
+  # Sync goal
+  local goal_id
+  goal_id=$(sql_raw "SELECT goal_id FROM tasks WHERE id='$full_tid'")
+  if [ -n "$goal_id" ]; then
+    _sync_goal "$goal_id"
+  fi
+  
+  local title
+  title=$(sql_raw "SELECT title FROM tasks WHERE id='$full_tid'")
+  if [ "$OUTPUT" = "json" ]; then
+    echo "{\"ok\":true,\"id\":\"$full_tid\",\"status\":\"in_progress\",\"title\":\"$title\"}"
+    return
+  fi
+  echo -e "${YELLOW}◐${NC} Started: ${BOLD}$title${NC}"
+}
+
+cmd_complete() {
+  ensure_db
+  local task_id="${1:?Usage: imi complete <task_id> [summary]}"
+  local summary="${2:-Task completed}"
+  
+  local full_tid
+  full_tid=$(sql_raw "SELECT id FROM tasks WHERE id LIKE '${task_id}%' LIMIT 1")
+  if [ -z "$full_tid" ]; then
+    if [ "$OUTPUT" = "json" ]; then echo '{"ok":false,"error":"Task not found"}'; fi
+    echo -e "${RED}Task not found: $task_id${NC}" >&2
+    return 1
+  fi
+  
+  local now
+  now=$(now_ms)
+  sql_exec "UPDATE tasks SET status='done', summary='$(echo "$summary" | sed "s/'/''/g")', completed_at=$now, updated_at=$now WHERE id='$full_tid'"
+  
+  local goal_id
+  goal_id=$(sql_raw "SELECT goal_id FROM tasks WHERE id='$full_tid'")
+  if [ -n "$goal_id" ]; then
+    _sync_goal "$goal_id"
+  fi
+  
+  local title
+  title=$(sql_raw "SELECT title FROM tasks WHERE id='$full_tid'")
+  if [ "$OUTPUT" = "json" ]; then
+    local goal_status=""
+    [ -n "$goal_id" ] && goal_status=$(sql_raw "SELECT status FROM goals WHERE id='$goal_id'")
+    echo "{\"ok\":true,\"id\":\"$full_tid\",\"status\":\"done\",\"title\":\"$title\",\"goal_status\":\"$goal_status\"}"
+    return
+  fi
+  echo -e "${GREEN}●${NC} Completed: ${BOLD}$title${NC}"
+}
+
+cmd_memory() {
+  ensure_db
+  local action="${1:-list}"
+  
+  case "$action" in
+    list)
+      echo -e "${BOLD}Memories${NC}"
+      echo ""
+      while IFS='|' read -r mid mkey mvalue msource gname; do
+        [ -z "$mid" ] && continue
+        echo -e "  ${BOLD}$mkey${NC}: $mvalue"
+        echo -e "    ${DIM}source=$msource  goal=$gname  ${mid:0:10}${NC}"
+      done < <(sql_raw "SELECT m.id, m.key, m.value, m.source, g.name FROM memories m LEFT JOIN goals g ON m.goal_id=g.id ORDER BY m.created_at DESC" ".separator |")
+      local total
+      total=$(sql_raw "SELECT count(*) FROM memories")
+      [ "$total" = "0" ] && echo -e "  ${DIM}(none yet — memories are created when agents complete tasks)${NC}"
+      ;;
+    add)
+      local goal_id="${2:?Usage: imi memory add <goal_id> <key> <value>}"
+      local key="${3:?Usage: imi memory add <goal_id> <key> <value>}"
+      local value="${4:?Usage: imi memory add <goal_id> <key> <value>}"
+      
+      local full_gid
+      full_gid=$(sql_raw "SELECT id FROM goals WHERE id LIKE '${goal_id}%' LIMIT 1")
+      if [ -z "$full_gid" ]; then
+        echo -e "${RED}Goal not found: $goal_id${NC}"
+        return 1
+      fi
+      
+      local id
+      id=$(gen_id)
+      sql_exec "INSERT INTO memories (id, goal_id, key, value, source, created_at) VALUES ('$id', '$full_gid', '$(echo "$key" | sed "s/'/''/g")', '$(echo "$value" | sed "s/'/''/g")', 'user', $(now_ms))"
+      echo -e "${GREEN}●${NC} Memory stored: ${BOLD}$key${NC} = $value"
+      ;;
+    *)
+      echo "Usage: imi memory [list|add <goal_id> <key> <value>]"
+      ;;
+  esac
+}
+
+cmd_delete() {
+  ensure_db
+  local target="${1:?Usage: imi delete <goal_id|task_id>}"
+  
+  # Try as goal first
+  local gid
+  gid=$(sql_raw "SELECT id FROM goals WHERE id LIKE '${target}%' LIMIT 1")
+  if [ -n "$gid" ]; then
+    local gname task_count
+    gname=$(sql_raw "SELECT name FROM goals WHERE id='$gid'")
+    task_count=$(sql_raw "SELECT count(*) FROM tasks WHERE goal_id='$gid'")
+    sql_exec "DELETE FROM memories WHERE goal_id='$gid'"
+    sql_exec "DELETE FROM tasks WHERE goal_id='$gid'"
+    sql_exec "DELETE FROM goals WHERE id='$gid'"
+    echo -e "${RED}✕${NC} Deleted goal: ${BOLD}$gname${NC} (+ $task_count tasks)"
+    return 0
+  fi
+  
+  # Try as task
+  local tid
+  tid=$(sql_raw "SELECT id FROM tasks WHERE id LIKE '${target}%' LIMIT 1")
+  if [ -n "$tid" ]; then
+    local ttitle goal_id
+    ttitle=$(sql_raw "SELECT title FROM tasks WHERE id='$tid'")
+    goal_id=$(sql_raw "SELECT goal_id FROM tasks WHERE id='$tid'")
+    sql_exec "DELETE FROM memories WHERE task_id='$tid'"
+    sql_exec "DELETE FROM tasks WHERE id='$tid'"
+    echo -e "${RED}✕${NC} Deleted task: ${BOLD}$ttitle${NC}"
+    # Sync goal if it had one
+    [ -n "$goal_id" ] && _sync_goal "$goal_id"
+    return 0
+  fi
+  
+  echo -e "${RED}Not found: $target${NC}"
+  return 1
+}
+
+cmd_reset() {
+  ensure_db
+  echo -e "${RED}${BOLD}⚠  This will delete ALL goals, tasks, and memories.${NC}"
+  read -p "Type 'yes' to confirm: " confirm
+  if [ "$confirm" = "yes" ]; then
+    sql_exec "DELETE FROM memories"
+    sql_exec "DELETE FROM tasks"
+    sql_exec "DELETE FROM goals"
+    echo -e "${GREEN}●${NC} Reset complete. Clean slate."
+  else
+    echo "Cancelled."
+  fi
+}
+
+# --- Internal ---
+
+_sync_goal() {
+  local goal_id="$1"
+  local statuses
+  statuses=$(sql_raw "SELECT status FROM tasks WHERE goal_id='$goal_id'")
+  
+  local new_status="todo"
+  if echo "$statuses" | grep -q "^done$"; then
+    # Has at least one done task
+    if ! echo "$statuses" | grep -qv "^done$"; then
+      new_status="done"  # All done
+    else
+      new_status="ongoing"  # Some done
+    fi
+  fi
+  if echo "$statuses" | grep -q "^review$"; then
+    new_status="review"
+  fi
+  if echo "$statuses" | grep -q "^in_progress$"; then
+    new_status="ongoing"
+  fi
+  
+  local now
+  now=$(now_ms)
+  if [ "$new_status" = "done" ]; then
+    sql_exec "UPDATE goals SET status='$new_status', completed_at=$now, updated_at=$now WHERE id='$goal_id'"
+  else
+    sql_exec "UPDATE goals SET status='$new_status', completed_at=NULL, updated_at=$now WHERE id='$goal_id'"
+  fi
+}
+
+# --- Main ---
+
+cmd_help() {
+  echo -e "${BOLD}imi${NC} — AI-native product ops state engine v${VERSION}"
+  echo -e "${DIM}The shared brain for your AI coding agents.${NC}"
+  echo ""
+  echo -e "${BOLD}USAGE${NC}"
+  echo "  imi <command> [args] [--json]"
+  echo ""
+  echo -e "${BOLD}COMMANDS${NC}"
+  echo -e "  ${CYAN}status${NC}                        Dashboard: goals + tasks + stats"
+  echo -e "  ${CYAN}goals${NC}                         List all goals"
+  echo -e "  ${CYAN}tasks${NC} [filter]                List tasks (all|todo|wip|review|done|<goal_id>)"
+  echo -e "  ${CYAN}context${NC} [goal_id]             Context for agents (global or per-goal)"
+  echo -e "  ${CYAN}memory${NC} [list|add ...]         View or store memories/insights"
+  echo ""
+  echo -e "  ${GREEN}add-goal${NC} <name> [desc] [pri]  Create a goal"
+  echo -e "  ${GREEN}add-task${NC} <gid> <title> [...]  Add a task to a goal"
+  echo -e "  ${GREEN}start${NC} <task_id>               Mark task in-progress"
+  echo -e "  ${GREEN}complete${NC} <tid> [summary]      Mark task done with summary"
+  echo -e "  ${GREEN}init${NC}                          Initialize DB in current project (.imi/state.db)"
+  echo ""
+  echo -e "  ${RED}delete${NC} <id>                   Delete a goal or task"
+  echo -e "  ${RED}reset${NC}                         Delete everything"
+  echo ""
+  echo -e "${BOLD}FLAGS${NC}"
+  echo -e "  ${DIM}--json${NC}    Machine-readable JSON output (for AI agents)"
+  echo ""
+  echo -e "${BOLD}DB DISCOVERY${NC}  (checked in order)"
+  echo -e "  1. ${DIM}\$IMI_DB${NC} env var"
+  echo -e "  2. ${DIM}.imi/state.db${NC} in current or parent directory"
+  echo -e "  3. ${DIM}~/Library/Application Support/Agents Dev/data/agents.db${NC} (macOS)"
+  echo -e "  4. ${DIM}~/.local/share/imi/state.db${NC} (Linux)"
+  echo ""
+  echo -e "${BOLD}INSTALL${NC}"
+  echo "  curl -fsSL https://raw.githubusercontent.com/ProjectAI00/ai-imi/main/scripts/install.sh | bash"
+  echo ""
+  echo -e "${BOLD}FOR AI AGENTS${NC}  Add to your CLAUDE.md or .github/copilot-instructions.md:"
+  echo -e "  ${DIM}# IMI Ops"
+  echo -e "  Use \`imi status\` to see current goals and tasks."
+  echo -e "  Use \`imi context\` before starting work to understand priorities."
+  echo -e "  Use \`imi start <id>\` when beginning a task."
+  echo -e "  Use \`imi complete <id> \"summary of what you did\"\` when done."
+  echo -e "  Use \`imi memory add <goal_id> <key> <value>\` to store insights.${NC}"
+}
+
+cmd_init() {
+  local project_db="${PWD}/.imi/state.db"
+  if [ -f "$project_db" ]; then
+    echo -e "${DIM}Already initialized: $project_db${NC}"
+    return
+  fi
+  DB_PATH="$project_db"
+  _init_db
+  echo -e "${GREEN}●${NC} Initialized IMI in ${BOLD}.imi/state.db${NC}"
+  echo -e "${DIM}Add .imi/ to .gitignore (or commit it for shared state)${NC}"
+}
+
+case "${1:-}" in
+  status|s)       cmd_status ;;
+  goals|g)        cmd_goals ;;
+  tasks|t)        cmd_tasks "${2:-all}" ;;
+  context|ctx|c)  cmd_context "${2:-}" ;;
+  memory|mem|m)   cmd_memory "${2:-list}" "${3:-}" "${4:-}" "${5:-}" ;;
+  add-goal|ag)    cmd_add_goal "${2:-}" "${3:-}" "${4:-}" ;;
+  add-task|at)    cmd_add_task "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+  start|st)       cmd_start "${2:-}" ;;
+  complete|done)  cmd_complete "${2:-}" "${3:-}" ;;
+  delete|rm)      cmd_delete "${2:-}" ;;
+  reset)          cmd_reset ;;
+  init)           cmd_init ;;
+  help|--help|-h) cmd_help ;;
+  version|--version|-v) echo "imi v${VERSION}" ;;
+  "")             cmd_status ;;
+  *)              echo -e "${RED}Unknown command: $1${NC}"; echo ""; cmd_help ;;
+esac
